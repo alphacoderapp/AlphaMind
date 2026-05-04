@@ -1,6 +1,6 @@
 {
   "name": "simple-claude",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Multi-project Claude Code wrapper",
   "main": "./out/main/index.js",
   "author": "Martin",

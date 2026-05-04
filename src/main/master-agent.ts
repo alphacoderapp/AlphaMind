@@ -204,9 +204,6 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'list_open_tabs',
   'list_all_projects',
   'dispatch_to_worker',
-  'inject_prompt',
-  'read_output',
-  'wait_for_idle',
   'git_status',
   'git_log',
   'git_diff',
@@ -236,21 +233,6 @@ const BUILTIN_TOOLS_TO_BLOCK = [
   'TodoWrite',
   'ExitPlanMode'
 ]
-
-async function waitForIdle(
-  ptyManager: PtyManager,
-  ptyId: string,
-  timeoutMs: number,
-  startTs: number
-): Promise<'idle' | 'timeout'> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const last = ptyManager.getLastDataTime(ptyId) ?? startTs
-    if (Date.now() - last > IDLE_THRESHOLD_MS) return 'idle'
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-  }
-  return 'timeout'
-}
 
 export function createMasterAgent(deps: MasterAgentDeps) {
   const { ptyManager, rendererControl, broadcastWorkerActivity } = deps
@@ -288,7 +270,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'dispatch_to_worker',
-        'Inject prompt into project tab, wait for worker to finish, return cleaned output. ANSI-stripped. Single round-trip. Use this as primary execution tool.',
+        'PRIMARY EXECUTION TOOL. Send a task prompt to a worker tab, wait for the worker (a separate Claude Code session) to finish, return cleaned output. ANSI-stripped. Auto-opens any URL the worker emits. For parallel work, call dispatch_to_worker N times in one assistant turn — they run concurrently.',
         {
           tabId: z.string().describe('Tab ID from list_open_tabs'),
           prompt: z.string().describe('Task for the worker'),
@@ -400,79 +382,6 @@ export function createMasterAgent(deps: MasterAgentDeps) {
               }
             ]
           }
-        }
-      ),
-
-      tool(
-        'inject_prompt',
-        'Send prompt to a tab without waiting. Use dispatch_to_worker instead unless you need fire-and-forget.',
-        {
-          tabId: z.string().describe('Tab ID'),
-          prompt: z.string().describe('Task for the worker')
-        },
-        async ({ tabId, prompt }) => {
-          const tab = tabRegistry.get(tabId)
-          if (!tab) {
-            return {
-              content: [{ type: 'text' as const, text: `Error: tab ${tabId} not found` }],
-              isError: true
-            }
-          }
-          const fullPrompt = COMPRESSION_PREFIX + prompt
-          ptyManager.write(tab.ptyId, fullPrompt)
-          await new Promise((r) => setTimeout(r, 80))
-          ptyManager.write(tab.ptyId, '\r')
-          return {
-            content: [{ type: 'text' as const, text: `Sent to ${tab.projectName}` }]
-          }
-        }
-      ),
-
-      tool(
-        'read_output',
-        'Read recent output from a tab.',
-        {
-          tabId: z.string().describe('Tab ID'),
-          sinceMs: z.number().optional().describe('Unix ms timestamp filter')
-        },
-        async ({ tabId, sinceMs }) => {
-          const tab = tabRegistry.get(tabId)
-          if (!tab) {
-            return {
-              content: [{ type: 'text' as const, text: `Error: tab ${tabId} not found` }],
-              isError: true
-            }
-          }
-          const text = ptyManager.getBuffer(tab.ptyId, sinceMs)
-          const cleaned = stripAnsi(text).trim()
-          return {
-            content: [{ type: 'text' as const, text: cleaned || '(no output yet)' }]
-          }
-        }
-      ),
-
-      tool(
-        'wait_for_idle',
-        'Wait for tab to finish (idle threshold ~600ms). Returns idle or timeout.',
-        {
-          tabId: z.string().describe('Tab ID'),
-          timeoutMs: z.number().optional().describe('Max wait ms (default 30000)')
-        },
-        async ({ tabId, timeoutMs }) => {
-          const tab = tabRegistry.get(tabId)
-          if (!tab) {
-            return {
-              content: [{ type: 'text' as const, text: `Error: tab ${tabId} not found` }],
-              isError: true
-            }
-          }
-          const result = await waitForIdle(
-            ptyManager,
-            tab.ptyId,
-            timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS,
-            Date.now()
-          )
-          return { content: [{ type: 'text' as const, text: result }] }
         }
       ),
 
@@ -715,7 +624,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'spawn_parallel_worker',
-        'In Ultimate Developer Mode: spawn ANOTHER worker tab for the ULM project (multiple workers allowed for parallel sub-tasks). Returns the new tab info. Outside ULM, this falls back to open_tab behavior (reuses existing tab).',
+        'Spawn an additional worker tab on a project (only allowed when that project is in Ultimate Developer Mode). Each worker is a fresh independent Claude Code session. Outside ULM, this reuses the existing single tab. Call this N times in one turn before dispatching to N parallel workers.',
         {
           projectId: z.string().describe('Project ID — must be the active ULM project')
         },
@@ -792,7 +701,10 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         mcpServers: { orchestrator: orchestratorServer },
         permissionMode: 'bypassPermissions',
         cwd: process.env.HOME || '/',
-        model: 'claude-haiku-4-5',
+        // Sonnet 4.6 for sharper scope-planning + conflict detection. Low
+        // effort = decisive coordinator, no over-deliberation, fast turns.
+        model: 'claude-sonnet-4-6',
+        effort: 'low',
         // Isolate master from user-level memory/settings. Without this, master
         // pulls ~/.claude/projects/*/memory/*.md into context and answers project
         // questions from cached general knowledge instead of the actual project.
