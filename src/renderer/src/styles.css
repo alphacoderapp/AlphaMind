@@ -1989,6 +1989,120 @@ input {
   font-family: var(--font-mono);
 }
 
+.master-parallel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 7, 0.78);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.master-parallel-card {
+  width: min(640px, 92vw);
+  background: rgba(15, 15, 18, 0.96);
+  border: 1px solid var(--c-cyan);
+  border-radius: 6px;
+  box-shadow: 0 0 32px rgba(34, 211, 238, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 16px;
+  font-family: var(--font-sans);
+}
+.master-parallel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.master-parallel-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-cyan);
+}
+.master-parallel-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.master-parallel-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+.master-parallel-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.master-parallel-textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 140px;
+  max-height: 320px;
+  transition: border-color 80ms;
+}
+.master-parallel-textarea:focus {
+  border-color: var(--c-cyan);
+  box-shadow: 0 0 0 1px var(--c-cyan);
+}
+.master-parallel-textarea::placeholder {
+  color: var(--text-disabled);
+}
+.master-parallel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.master-parallel-cancel,
+.master-parallel-submit {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 100ms, box-shadow 100ms;
+}
+.master-parallel-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.master-parallel-cancel:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.master-parallel-submit {
+  background: transparent;
+  border: 1px solid var(--c-cyan);
+  color: var(--c-cyan);
+}
+.master-parallel-submit:hover:not(:disabled) {
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
+}
+.master-parallel-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .master-pane-input {
   display: flex;
   gap: 8px;
@@ -2019,6 +2133,29 @@ input {
 }
 .master-pane-textarea::placeholder {
   color: var(--text-disabled);
+}
+.master-pane-parallel-trigger {
+  width: 32px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  letter-spacing: -2px;
+  transition: all 80ms ease-out;
+  flex-shrink: 0;
+}
+.master-pane-parallel-trigger:hover:not(:disabled) {
+  border-color: var(--c-cyan);
+  color: var(--c-cyan);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.2);
+}
+.master-pane-parallel-trigger:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 .master-pane-submit {
   width: 36px;

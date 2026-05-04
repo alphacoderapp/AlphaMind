@@ -73,11 +73,46 @@ INVESTIGATE BEFORE ASKING:
 ULTIMATE DEVELOPER MODE (ULM):
 - Call get_workspace_state at the start of any task to check ULM status. If ULM is active for project X, the rules change.
 - In ULM, the user is FOCUSED on project X. ALL dispatches go to that project's tabs unless the user explicitly references another project.
-- Multiple workers for the ULM project are ALLOWED and ENCOURAGED for parallel sub-tasks. Use spawn_parallel_worker to create additional workers.
-- BEFORE dispatching multi-task work, plan file scope: ensure no two workers touch the same file in flight. Use list_open_tabs to see active workers and read_file to verify scope. If overlap risk, serialize.
-- WORKERS NEVER COMMIT OR PUSH in ULM. Add explicit instruction in every dispatched prompt: "DO NOT git commit, DO NOT git push, DO NOT git add. Only edit files. Master will commit centrally when all workers are done."
-- After workers finish, YOU validate (read_file, dispatch a "test" task, git_status to see what changed) and YOU commit centrally via dispatch to one worker: "git add -A && git commit -m '...' && git push". Single coordinated commit.
-- If the user has not specified which sub-tasks to parallelize, ASK them to enumerate before spawning workers.
+- Multiple workers for the ULM project are ALLOWED and ENCOURAGED for parallel sub-tasks.
+- Workers are SEPARATE Claude Code subprocesses (independent sessions). They are NOT subagents inside you. To run work in parallel, you MUST spawn additional workers and dispatch to them — never try to do the work yourself.
+
+PARALLEL DISPATCH PROTOCOL — when user gives N parallel tasks, follow these phases EXACTLY:
+
+  PHASE 1 (one assistant turn): RECON
+    - get_workspace_state (confirm ULM project + existing worker count)
+    - list_open_tabs
+    - git_status on the project path (see in-flight changes)
+    - For each task, if scope unclear, read_file the likely-affected file to estimate scope.
+
+  PHASE 2 (one assistant turn): SPAWN
+    - Call spawn_parallel_worker EXACTLY (N - existing_workers) times in this single turn (parallel tool calls).
+    - Capture each returned tabId.
+
+  PHASE 3 (one assistant turn): DISPATCH
+    - Call dispatch_to_worker N times in this single turn (parallel).
+    - EACH dispatched prompt MUST contain three lines verbatim:
+      1. The task description (specific, scoped).
+      2. "Touch only these files/dirs: <list>"
+      3. "DO NOT git commit. DO NOT git push. DO NOT git add. Only edit files. Master will commit centrally when all workers are done."
+
+  PHASE 4 (after all dispatches return): REVIEW
+    - git_status + git_diff on the project.
+    - Summarize what each worker delivered in 1 sentence per worker.
+    - Ask user verbatim: "All N workers idle. Diff summary above. Commit & push, or any follow-up?"
+    - DO NOT commit until user confirms.
+
+  PHASE 5 (only on user confirmation): COMMIT
+    - dispatch_to_worker on a SINGLE worker tab with: "git add -A && git commit -m '<concise message>' && git push"
+
+CONFLICT PREVENTION:
+- Before PHASE 3, if two tasks plausibly touch the same file (e.g. both mention auth, both edit config, both need package.json changes), SERIALIZE those: dispatch task A, wait_for_idle, then dispatch task B to the same worker. Do NOT run them in parallel.
+- Default-safe: when in doubt, serialize. The user can override with explicit "päriselt paralleelselt" / "really in parallel".
+- After PHASE 4 review, if you see two workers modified the same file (overlapping diff), flag this in the review summary as ⚠ before asking to commit.
+
+NEVER:
+- Workers must NEVER commit, push, or stage. Period. Always include the "DO NOT" line in every dispatched prompt.
+- Master is the only entity that touches git history.
+- If user has NOT specified the parallel sub-tasks, ASK them to enumerate before spawning. Don't invent tasks.
 
 ROUTING DECISIONS:
 1. Pure metadata query (git status, recent commits, read a file) → use direct tools (git_status, git_log, read_file). Faster, no worker round-trip.
@@ -174,6 +209,7 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'wait_for_idle',
   'git_status',
   'git_log',
+  'git_diff',
   'read_file',
   'create_project',
   'open_tab',
@@ -451,6 +487,46 @@ export function createMasterAgent(deps: MasterAgentDeps) {
             const stats = await getProjectStats(projectPath)
             return {
               content: [{ type: 'text' as const, text: JSON.stringify(stats.git, null, 2) }]
+            }
+          } catch (e) {
+            return {
+              content: [
+                { type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }
+              ],
+              isError: true
+            }
+          }
+        }
+      ),
+
+      tool(
+        'git_diff',
+        'Get uncommitted git diff (unstaged + staged) for a project. Use after parallel workers finish to review aggregate changes before committing centrally.',
+        {
+          projectPath: z.string().describe('Absolute project path'),
+          maxBytes: z
+            .number()
+            .optional()
+            .describe('Truncate diff at this many bytes (default 20000)')
+        },
+        async ({ projectPath, maxBytes }) => {
+          try {
+            const { exec } = await import('child_process')
+            const { promisify } = await import('util')
+            const execP = promisify(exec)
+            const cap = maxBytes ?? 20000
+            const { stdout: status } = await execP(`git -C "${projectPath}" status --short`, {
+              maxBuffer: 1024 * 1024
+            })
+            const { stdout: diff } = await execP(`git -C "${projectPath}" diff HEAD`, {
+              maxBuffer: 5 * 1024 * 1024
+            })
+            const truncated = diff.length > cap
+            const body =
+              `=== STATUS (short) ===\n${status || '(clean)'}\n\n=== DIFF (HEAD) ===\n` +
+              (truncated ? diff.slice(0, cap) + `\n\n...[truncated, ${diff.length} bytes total]` : diff || '(no diff)')
+            return {
+              content: [{ type: 'text' as const, text: body }]
             }
           } catch (e) {
             return {

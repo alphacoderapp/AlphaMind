@@ -131,6 +131,8 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [workers, setWorkers] = useState<Map<string, WorkerActivity>>(new Map())
+  const [parallelOpen, setParallelOpen] = useState(false)
+  const [parallelTasks, setParallelTasks] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
@@ -278,47 +280,63 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
     })
   }, [])
 
+  const sendPrompt = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || sending) return
+
+      const userMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: trimmed,
+        timestamp: Date.now()
+      }
+      const history = messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-8)
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content
+        }))
+        .filter((m) => m.content.trim().length > 0)
+
+      setMessages((prev) => [...prev, userMsg])
+      setInput('')
+      setSending(true)
+      streamingMsgIdRef.current = null
+
+      try {
+        const requestId = await window.api.master.sendStart(trimmed, history)
+        requestIdRef.current = requestId
+      } catch (e) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'system',
+            content: `Error: ${e instanceof Error ? e.message : String(e)}`,
+            timestamp: Date.now()
+          }
+        ])
+        setSending(false)
+      }
+    },
+    [messages, sending]
+  )
+
   const submit = useCallback(async () => {
     const trimmed = input.trim()
     if (!trimmed || sending) return
 
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: trimmed,
-      timestamp: Date.now()
+    // Slash command: /parallel opens task list modal
+    if (/^\/parallel\b/i.test(trimmed)) {
+      setParallelOpen(true)
+      setInput('')
+      return
     }
-    // Build history (last 8 turns, user+assistant only) BEFORE state update
-    const history = messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-8)
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }))
-      .filter((m) => m.content.trim().length > 0)
 
-    setMessages((prev) => [...prev, userMsg])
-    setInput('')
-    setSending(true)
-    streamingMsgIdRef.current = null
-
-    try {
-      const requestId = await window.api.master.sendStart(trimmed, history)
-      requestIdRef.current = requestId
-    } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'system',
-          content: `Error: ${e instanceof Error ? e.message : String(e)}`,
-          timestamp: Date.now()
-        }
-      ])
-      setSending(false)
-    }
-  }, [input, sending])
+    await sendPrompt(trimmed)
+  }, [input, sending, sendPrompt])
 
   const onDragStart = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -442,6 +460,15 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
             </div>
           )}
           <div className="master-pane-input">
+            <button
+              type="button"
+              className="master-pane-parallel-trigger"
+              onClick={() => setParallelOpen(true)}
+              disabled={sending}
+              title="Parallel dispatch (/parallel)"
+            >
+              ⫶⫶
+            </button>
             <textarea
               ref={inputRef}
               className="master-pane-textarea"
@@ -468,6 +495,93 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
             </button>
           </div>
         </>
+      )}
+      {parallelOpen && (
+        <div
+          className="master-parallel-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setParallelOpen(false)
+              setParallelTasks('')
+            }
+          }}
+        >
+          <div className="master-parallel-card">
+            <div className="master-parallel-header">
+              <span className="master-parallel-title">PARALLEL DISPATCH</span>
+              <button
+                type="button"
+                className="master-parallel-close"
+                onClick={() => {
+                  setParallelOpen(false)
+                  setParallelTasks('')
+                }}
+                aria-label="close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="master-parallel-hint">
+              One task per line. Master spawns one worker per task, plans
+              non-overlapping scope, runs in parallel, reviews diff at the end.
+              Workers will not commit — you confirm before push.
+            </div>
+            <textarea
+              className="master-parallel-textarea"
+              autoFocus
+              value={parallelTasks}
+              onChange={(e) => setParallelTasks(e.target.value)}
+              placeholder={`Diagnose Apple sign-in regression\nImplement email login\nFix dashboard hardcoded ET locale\nFix payment-timeout email to client`}
+              rows={8}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault()
+                  const tasks = parallelTasks
+                    .split('\n')
+                    .map((t) => t.trim())
+                    .filter((t) => t.length > 0)
+                  if (tasks.length === 0) return
+                  const numbered = tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')
+                  const prompt = `Run the following ${tasks.length} task(s) in parallel via the PARALLEL DISPATCH PROTOCOL (RECON → SPAWN → DISPATCH → REVIEW). Workers must not commit; you ask me before any commit/push.\n\nTASKS:\n${numbered}\n\nIf any two tasks would touch the same file, serialize those instead of parallelizing them.`
+                  setParallelOpen(false)
+                  setParallelTasks('')
+                  sendPrompt(prompt)
+                }
+              }}
+            />
+            <div className="master-parallel-actions">
+              <button
+                type="button"
+                className="master-parallel-cancel"
+                onClick={() => {
+                  setParallelOpen(false)
+                  setParallelTasks('')
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="master-parallel-submit"
+                disabled={parallelTasks.trim().length === 0 || sending}
+                onClick={() => {
+                  const tasks = parallelTasks
+                    .split('\n')
+                    .map((t) => t.trim())
+                    .filter((t) => t.length > 0)
+                  if (tasks.length === 0) return
+                  const numbered = tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')
+                  const prompt = `Run the following ${tasks.length} task(s) in parallel via the PARALLEL DISPATCH PROTOCOL (RECON → SPAWN → DISPATCH → REVIEW). Workers must not commit; you ask me before any commit/push.\n\nTASKS:\n${numbered}\n\nIf any two tasks would touch the same file, serialize those instead of parallelizing them.`
+                  setParallelOpen(false)
+                  setParallelTasks('')
+                  sendPrompt(prompt)
+                }}
+              >
+                Dispatch · ⌘⏎
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
