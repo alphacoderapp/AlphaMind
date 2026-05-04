@@ -402,6 +402,35 @@ export default function App() {
     })
   }, [])
 
+  const repathTab = useCallback(
+    async (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId)
+      if (!tab) return
+      const newPath = await window.api.dialog.pickFolder()
+      if (!newPath) return
+      await updateProject(tab.project.id, { path: newPath })
+      // Kill old PTY (which was failing) and spawn fresh at new path
+      try {
+        window.api.pty.kill(tab.ptyId)
+      } catch {
+        /* noop */
+      }
+      try {
+        const newPtyId = await window.api.pty.spawn(newPath, { autoRun: 'claude' })
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === tabId
+              ? { ...t, ptyId: newPtyId, sessionId: undefined, project: { ...t.project, path: newPath } }
+              : t
+          )
+        )
+      } catch (e) {
+        console.error('Repath spawn failed:', e)
+      }
+    },
+    [tabs, updateProject]
+  )
+
   const restartTab = useCallback(
     async (tabId: string) => {
       const tab = tabs.find((t) => t.id === tabId)
@@ -645,7 +674,12 @@ export default function App() {
             onSelect={setActiveTabId}
             onClose={closeTab}
           />
-          <TerminalArea tabs={tabs} activeTabId={activeTabId} onRestart={restartTab} />
+          <TerminalArea
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onRestart={restartTab}
+            onRepath={repathTab}
+          />
           <MasterPane
             collapsed={masterCollapsed}
             onToggleCollapse={() => setMasterCollapsed((prev) => !prev)}

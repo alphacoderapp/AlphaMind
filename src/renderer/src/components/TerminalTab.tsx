@@ -8,9 +8,10 @@ interface Props {
   tab: Tab
   active: boolean
   onRestart: (tabId: string) => void
+  onRepath: (tabId: string) => void
 }
 
-export function TerminalTab({ tab, active, onRestart }: Props) {
+export function TerminalTab({ tab, active, onRestart, onRepath }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -219,7 +220,15 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
               )}
             </div>
             <div className="terminal-ended-actions">
-              {!pathMissing && (
+              {pathMissing ? (
+                <button
+                  type="button"
+                  className="terminal-ended-restart"
+                  onClick={() => onRepath(tab.id)}
+                >
+                  ⌕ Pick New Folder
+                </button>
+              ) : (
                 <button
                   type="button"
                   className="terminal-ended-restart"
@@ -235,13 +244,15 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
                       : '↻ Resume Session'}
                 </button>
               )}
-              <button
-                type="button"
-                className="terminal-ended-secondary"
-                onClick={handleOpenFolder}
-              >
-                Open in Finder
-              </button>
+              {!pathMissing && (
+                <button
+                  type="button"
+                  className="terminal-ended-secondary"
+                  onClick={handleOpenFolder}
+                >
+                  Open in Finder
+                </button>
+              )}
             </div>
           </div>
         </div>
