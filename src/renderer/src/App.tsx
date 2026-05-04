@@ -463,6 +463,22 @@ export default function App() {
           const p = req.payload as { projectId: string }
           const project = projectsRef.current.find((x) => x.id === p.projectId)
           if (!project) return respond({ ok: false, error: 'project not found' })
+          // Reuse existing live tab for this project to avoid duplicates
+          const existing = tabsRef.current.find((t) => t.project.id === project.id)
+          if (existing) {
+            setActiveTabId(existing.id)
+            return respond({
+              ok: true,
+              data: {
+                tabId: existing.id,
+                ptyId: existing.ptyId,
+                projectId: project.id,
+                projectName: project.name,
+                projectPath: project.path,
+                reused: true
+              }
+            })
+          }
           const ptyId = await window.api.pty.spawn(project.path, { autoRun: 'claude' })
           const tab: Tab = { id: crypto.randomUUID(), ptyId, project }
           setTabs((prev) => [...prev, tab])
@@ -474,7 +490,8 @@ export default function App() {
               ptyId: tab.ptyId,
               projectId: project.id,
               projectName: project.name,
-              projectPath: project.path
+              projectPath: project.path,
+              reused: false
             }
           })
         }

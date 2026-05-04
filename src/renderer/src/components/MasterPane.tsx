@@ -306,7 +306,9 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
                       {m.toolCalls.map((tc) => (
                         <div key={tc.id} className={`master-tool-call master-tool-call-${tc.status}`}>
                           <span className="master-tool-call-arrow">→</span>
-                          <span className="master-tool-call-name">{tc.name || 'tool'}</span>
+                          <span className="master-tool-call-name">
+                            {(tc.name || 'tool').replace(/^mcp__orchestrator__/, '')}
+                          </span>
                           <span className="master-tool-call-status">
                             {tc.status === 'running' ? '…' : tc.status === 'done' ? '✓' : '✗'}
                           </span>
