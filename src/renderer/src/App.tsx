@@ -156,8 +156,16 @@ export default function App() {
       const state = await window.api.state.load()
       if (cancelled || !state || !state.tabs?.length) return
 
+      // Strict: never restore duplicate tabs for same project. Keep first only.
+      const seenProjectIds = new Set<string>()
+      const dedupedStored = state.tabs.filter((s) => {
+        if (seenProjectIds.has(s.projectId)) return false
+        seenProjectIds.add(s.projectId)
+        return true
+      })
+
       const newTabs: Tab[] = []
-      for (const stored of state.tabs) {
+      for (const stored of dedupedStored) {
         const project = projects.find((p) => p.id === stored.projectId)
         if (!project) continue
         try {
@@ -326,13 +334,12 @@ export default function App() {
   }, [tabs, tabActivityStates])
 
   const openProject = useCallback(
-    async (project: Project, opts: { newTab?: boolean } = {}) => {
-      if (!opts.newTab) {
-        const existing = tabs.find((t) => t.project.id === project.id && !t.sessionId)
-        if (existing) {
-          setActiveTabId(existing.id)
-          return
-        }
+    async (project: Project, _opts: { newTab?: boolean } = {}) => {
+      // Strict no-duplicate rule: one tab per project. Always reuse if exists.
+      const existing = tabs.find((t) => t.project.id === project.id)
+      if (existing) {
+        setActiveTabId(existing.id)
+        return
       }
       const ptyId = await window.api.pty.spawn(project.path, { autoRun: 'claude' })
       const tab: Tab = {
@@ -353,6 +360,11 @@ export default function App() {
         setActiveTabId(existing.id)
         return
       }
+      // Strict no-duplicate rule: kill any existing project tab before resuming a session
+      const projectTab = tabs.find((t) => t.project.id === project.id)
+      if (projectTab) {
+        window.api.pty.kill(projectTab.ptyId)
+      }
       const ptyId = await window.api.pty.spawn(project.path, {
         autoRun: `claude --resume ${sessionId}`
       })
@@ -362,7 +374,10 @@ export default function App() {
         project,
         sessionId
       }
-      setTabs((prev) => [...prev, tab])
+      setTabs((prev) => {
+        const filtered = projectTab ? prev.filter((t) => t.id !== projectTab.id) : prev
+        return [...filtered, tab]
+      })
       setActiveTabId(tab.id)
     },
     [tabs]
