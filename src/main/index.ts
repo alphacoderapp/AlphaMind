@@ -229,6 +229,16 @@ ipcMain.handle('state:save', async (_event, state: StoredAppState) => {
   await saveState(state)
 })
 
+ipcMain.handle('path:exists', async (_event, p: string) => {
+  try {
+    const { stat } = await import('fs/promises')
+    const s = await stat(p)
+    return s.isDirectory()
+  } catch {
+    return false
+  }
+})
+
 ipcMain.handle('dialog:pickFolder', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   const result = win

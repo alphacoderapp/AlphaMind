@@ -16,11 +16,28 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
   const fitRef = useRef<FitAddon | null>(null)
   const [ended, setEnded] = useState(false)
   const [restarting, setRestarting] = useState(false)
+  const [pathExists, setPathExists] = useState<boolean | null>(null)
+  const [quickExit, setQuickExit] = useState(false)
+  const mountedAtRef = useRef<number>(Date.now())
 
   useEffect(() => {
     setEnded(false)
     setRestarting(false)
-  }, [tab.ptyId])
+    setQuickExit(false)
+    mountedAtRef.current = Date.now()
+    let cancelled = false
+    window.api.path
+      .exists(tab.project.path)
+      .then((ok) => {
+        if (!cancelled) setPathExists(ok)
+      })
+      .catch(() => {
+        if (!cancelled) setPathExists(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab.ptyId, tab.project.path])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -82,6 +99,8 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
 
     const exitUnsub = window.api.pty.onExit((id) => {
       if (id === tab.ptyId) {
+        const elapsed = Date.now() - mountedAtRef.current
+        setQuickExit(elapsed < 3000)
         setEnded(true)
       }
     })
@@ -138,11 +157,19 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
     if (restarting) return
     setRestarting(true)
     try {
-      onRestart(tab.id)
-    } catch {
-      setRestarting(false)
+      await onRestart(tab.id)
+    } finally {
+      // Reset by useEffect on ptyId change; this is a fallback if restart errored
+      setTimeout(() => setRestarting(false), 1500)
     }
   }
+
+  const handleOpenFolder = (): void => {
+    window.api.shell.openPath(tab.project.path)
+  }
+
+  const pathMissing = pathExists === false
+  const failedToStart = quickExit && !pathMissing
 
   return (
     <div
@@ -154,27 +181,68 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
     >
       <div ref={containerRef} className="terminal-tab" />
       {ended && (
-        <div className="terminal-ended-overlay">
+        <div className={`terminal-ended-overlay${pathMissing || failedToStart ? ' terminal-ended-error' : ''}`}>
           <div className="terminal-ended-card">
             <div
               className="terminal-ended-mark"
               style={{
-                background: tab.project.color,
-                boxShadow: `0 0 12px ${tab.project.color}`
+                background: pathMissing || failedToStart ? '#ef4444' : tab.project.color,
+                boxShadow: `0 0 12px ${pathMissing || failedToStart ? '#ef4444' : tab.project.color}`
               }}
             />
-            <div className="terminal-ended-title">Session ended</div>
-            <div className="terminal-ended-subtitle">
-              Claude exited in <strong>{tab.project.name}</strong>. Resume picks up where you left off.
+            <div className="terminal-ended-title">
+              {pathMissing
+                ? 'Path not found'
+                : failedToStart
+                  ? 'Failed to start'
+                  : 'Session ended'}
             </div>
-            <button
-              type="button"
-              className="terminal-ended-restart"
-              onClick={handleRestart}
-              disabled={restarting}
-            >
-              {restarting ? 'Resuming…' : '↻ Resume Session'}
-            </button>
+            <div className="terminal-ended-subtitle">
+              {pathMissing ? (
+                <>
+                  Folder does not exist:
+                  <br />
+                  <code className="terminal-ended-path">{tab.project.path}</code>
+                  <br />
+                  Update the project path or recreate the folder.
+                </>
+              ) : failedToStart ? (
+                <>
+                  Claude exited within seconds in <strong>{tab.project.name}</strong>.
+                  <br />
+                  Likely auth, network, or claude CLI issue.
+                </>
+              ) : (
+                <>
+                  Claude exited in <strong>{tab.project.name}</strong>. Resume picks up where you left off.
+                </>
+              )}
+            </div>
+            <div className="terminal-ended-actions">
+              {!pathMissing && (
+                <button
+                  type="button"
+                  className="terminal-ended-restart"
+                  onClick={handleRestart}
+                  disabled={restarting}
+                >
+                  {restarting
+                    ? failedToStart
+                      ? 'Trying again…'
+                      : 'Resuming…'
+                    : failedToStart
+                      ? '↻ Try Again'
+                      : '↻ Resume Session'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="terminal-ended-secondary"
+                onClick={handleOpenFolder}
+              >
+                Open in Finder
+              </button>
+            </div>
           </div>
         </div>
       )}

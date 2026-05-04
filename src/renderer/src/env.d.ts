@@ -91,6 +91,10 @@ interface DialogApi {
   pickFolder: () => Promise<string | null>
 }
 
+interface PathApi {
+  exists: (p: string) => Promise<boolean>
+}
+
 interface ShellApi {
   openPath: (path: string) => void
 }
@@ -171,6 +175,7 @@ declare global {
       stats: StatsApi
       state: StateApi
       dialog: DialogApi
+      path: PathApi
       shell: ShellApi
       clipboard: ClipboardApi
       window: WindowApi

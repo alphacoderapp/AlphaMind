@@ -127,6 +127,9 @@ const api = {
   dialog: {
     pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFolder')
   },
+  path: {
+    exists: (p: string): Promise<boolean> => ipcRenderer.invoke('path:exists', p)
+  },
   shell: {
     openPath: (path: string): void => {
       ipcRenderer.send('shell:openPath', path)
