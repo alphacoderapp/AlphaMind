@@ -165,7 +165,7 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
             />
             <div className="terminal-ended-title">Session ended</div>
             <div className="terminal-ended-subtitle">
-              Claude exited in <strong>{tab.project.name}</strong>. Restart to start a fresh session.
+              Claude exited in <strong>{tab.project.name}</strong>. Resume picks up where you left off.
             </div>
             <button
               type="button"
@@ -173,7 +173,7 @@ export function TerminalTab({ tab, active, onRestart }: Props) {
               onClick={handleRestart}
               disabled={restarting}
             >
-              {restarting ? 'Restarting…' : '↻ Restart Session'}
+              {restarting ? 'Resuming…' : '↻ Resume Session'}
             </button>
           </div>
         </div>

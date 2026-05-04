@@ -407,11 +407,25 @@ export default function App() {
       const tab = tabs.find((t) => t.id === tabId)
       if (!tab) return
       try {
-        const newPtyId = await window.api.pty.spawn(tab.project.path, { autoRun: 'claude' })
+        // Resume the most recent session for this project so context is preserved
+        let sessionId: string | undefined = tab.sessionId
+        if (!sessionId) {
+          try {
+            const sessions = await window.api.sessions.list(tab.project.path)
+            if (sessions && sessions.length > 0) {
+              const latest = [...sessions].sort(
+                (a, b) => b.lastTimestamp - a.lastTimestamp
+              )[0]
+              sessionId = latest?.id
+            }
+          } catch {
+            /* fallback to fresh claude */
+          }
+        }
+        const autoRun = sessionId ? `claude --resume ${sessionId}` : 'claude'
+        const newPtyId = await window.api.pty.spawn(tab.project.path, { autoRun })
         setTabs((prev) =>
-          prev.map((t) =>
-            t.id === tabId ? { ...t, ptyId: newPtyId, sessionId: undefined } : t
-          )
+          prev.map((t) => (t.id === tabId ? { ...t, ptyId: newPtyId, sessionId } : t))
         )
       } catch (e) {
         console.error('Restart failed:', e)
