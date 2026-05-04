@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import { join, sep } from 'path'
 import { existsSync } from 'fs'
 import type { PtyManager } from './pty-manager'
@@ -54,6 +54,8 @@ CRITICAL UX CONTRACT:
 - The user ONLY talks to you, in this one chat. They never type into project tabs.
 - NEVER tell the user "go to the X tab" or "type Y in project". You execute everything.
 - If work belongs in a project (edit code, run command, commit, test, debug, build), DISPATCH to that project's worker. Never describe steps for the user to do.
+- When a worker reports a URL (localhost server, deploy URL, anything that needs a browser), AUTO-OPEN it immediately via open_url. Do NOT write "Open http://..." for the user. Do NOT write "Visit example.com" — call open_url and just confirm "opened in browser".
+- Never write "How to test:" / "Kuidas katsetada:" sections with manual steps. If something needs to happen, you do it (dispatch + open_url). The only output to user is a status report of what already happened.
 
 ROUTING DECISIONS:
 1. Pure metadata query (git status, recent commits, read a file) → use direct tools (git_status, git_log, read_file). Faster, no worker round-trip.
@@ -149,8 +151,26 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'create_project',
   'open_tab',
   'close_tab',
-  'switch_tab'
+  'switch_tab',
+  'open_url'
 ] as const
+
+const BUILTIN_TOOLS_TO_BLOCK = [
+  'Task',
+  'Bash',
+  'BashOutput',
+  'KillShell',
+  'Glob',
+  'Grep',
+  'Read',
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'WebFetch',
+  'WebSearch',
+  'TodoWrite',
+  'ExitPlanMode'
+]
 
 async function waitForIdle(
   ptyManager: PtyManager,
@@ -529,6 +549,30 @@ export function createMasterAgent(deps: MasterAgentDeps) {
             content: [{ type: 'text' as const, text: 'active' }]
           }
         }
+      ),
+
+      tool(
+        'open_url',
+        'Open a URL in the user default browser. Use immediately when a worker reports a localhost server URL, deploy URL, or anything the user should see — do NOT tell the user to open it themselves.',
+        {
+          url: z.string().describe('Full URL with protocol')
+        },
+        async ({ url }) => {
+          try {
+            await shell.openExternal(url)
+            return { content: [{ type: 'text' as const, text: `Opened ${url}` }] }
+          } catch (e) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Error: ${e instanceof Error ? e.message : String(e)}`
+                }
+              ],
+              isError: true
+            }
+          }
+        }
       )
     ]
 
@@ -564,9 +608,15 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         permissionMode: 'bypassPermissions',
         cwd: process.env.HOME || '/',
         model: 'claude-haiku-4-5',
-        // Master must only use orchestrator MCP tools. No Bash/Read/Write/Edit
-        // on the user's machine — workers handle that. This prevents macOS TCC
-        // prompts (Music/Documents/Photos) from incidental Bash filesystem walks.
+        // Master must only use orchestrator MCP tools. Both:
+        //  - tools: [] disables ALL built-in tools (Bash/Read/Write/Edit/etc)
+        //  - disallowedTools: explicit blocklist as belt-and-suspenders
+        //  - allowedTools: orchestrator MCPs auto-approved (no permission prompts)
+        // This prevents macOS TCC prompts (Music/Documents/Photos) from
+        // incidental Bash filesystem walks, AND keeps master strictly an
+        // orchestrator — workers do all real fs/shell work.
+        tools: [],
+        disallowedTools: BUILTIN_TOOLS_TO_BLOCK,
         allowedTools: ORCHESTRATOR_TOOL_NAMES.map((n) => `mcp__orchestrator__${n}`)
       }
       if (claudeBin) queryOptions.pathToClaudeCodeExecutable = claudeBin

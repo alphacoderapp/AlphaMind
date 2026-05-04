@@ -4,7 +4,40 @@ import ReactMarkdown from 'react-markdown'
 interface ToolCall {
   id: string
   name: string
+  input?: Record<string, unknown>
   status: 'running' | 'done' | 'error'
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  list_open_tabs: 'Checking tabs',
+  list_all_projects: 'Listing projects',
+  dispatch_to_worker: 'Dispatching to worker',
+  inject_prompt: 'Sending prompt',
+  read_output: 'Reading output',
+  wait_for_idle: 'Waiting for worker',
+  git_status: 'Git status',
+  git_log: 'Git log',
+  read_file: 'Reading file',
+  create_project: 'Creating project',
+  open_tab: 'Opening tab',
+  close_tab: 'Closing tab',
+  switch_tab: 'Switching tab',
+  open_url: 'Opening browser'
+}
+
+function formatToolName(tc: ToolCall): string {
+  const short = (tc.name || 'tool').replace(/^mcp__orchestrator__/, '')
+  const label = TOOL_LABELS[short] || short
+  const input = tc.input || {}
+  const arg = (() => {
+    if (typeof input.url === 'string') return input.url
+    if (typeof input.relativePath === 'string') return input.relativePath
+    if (typeof input.path === 'string') return input.path
+    if (typeof input.projectPath === 'string') return input.projectPath.split('/').pop()
+    if (typeof input.name === 'string') return input.name
+    return ''
+  })()
+  return arg ? `${label} · ${arg}` : label
 }
 
 interface WorkerActivity {
@@ -40,6 +73,7 @@ interface AnyEvent {
       name?: string
       id?: string
       tool_use_id?: string
+      input?: Record<string, unknown>
     }>
   }
   result?: string
@@ -64,6 +98,7 @@ function extractFromEvent(event: unknown): { textDelta?: string; toolCalls?: Too
         toolCalls.push({
           id: b.id ?? Math.random().toString(36),
           name: b.name,
+          input: b.input,
           status: 'running'
         })
       }
@@ -306,9 +341,7 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
                       {m.toolCalls.map((tc) => (
                         <div key={tc.id} className={`master-tool-call master-tool-call-${tc.status}`}>
                           <span className="master-tool-call-arrow">→</span>
-                          <span className="master-tool-call-name">
-                            {(tc.name || 'tool').replace(/^mcp__orchestrator__/, '')}
-                          </span>
+                          <span className="master-tool-call-name">{formatToolName(tc)}</span>
                           <span className="master-tool-call-status">
                             {tc.status === 'running' ? '…' : tc.status === 'done' ? '✓' : '✗'}
                           </span>
@@ -409,6 +442,7 @@ function mergeToolCalls(existing: ToolCall[], incoming: ToolCall[]): ToolCall[] 
       result[idx] = {
         ...cur,
         name: tc.name && tc.name.length > 0 ? tc.name : cur.name,
+        input: tc.input ?? cur.input,
         status: tc.status
       }
     }
