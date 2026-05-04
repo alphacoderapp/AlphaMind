@@ -63,6 +63,15 @@ KNOWLEDGE BOUNDARY:
 - When the user asks "what does X do" / "mis X teeb", call read_file (e.g. README.md, package.json, CLAUDE.md inside the project) or dispatch_to_worker to ask the project's own claude. Never make up architecture details from general knowledge.
 - If you don't know, say so and propose calling a tool. Don't fabricate.
 
+ULTIMATE DEVELOPER MODE (ULM):
+- Call get_workspace_state at the start of any task to check ULM status. If ULM is active for project X, the rules change.
+- In ULM, the user is FOCUSED on project X. ALL dispatches go to that project's tabs unless the user explicitly references another project.
+- Multiple workers for the ULM project are ALLOWED and ENCOURAGED for parallel sub-tasks. Use spawn_parallel_worker to create additional workers.
+- BEFORE dispatching multi-task work, plan file scope: ensure no two workers touch the same file in flight. Use list_open_tabs to see active workers and read_file to verify scope. If overlap risk, serialize.
+- WORKERS NEVER COMMIT OR PUSH in ULM. Add explicit instruction in every dispatched prompt: "DO NOT git commit, DO NOT git push, DO NOT git add. Only edit files. Master will commit centrally when all workers are done."
+- After workers finish, YOU validate (read_file, dispatch a "test" task, git_status to see what changed) and YOU commit centrally via dispatch to one worker: "git add -A && git commit -m '...' && git push". Single coordinated commit.
+- If the user has not specified which sub-tasks to parallelize, ASK them to enumerate before spawning workers.
+
 ROUTING DECISIONS:
 1. Pure metadata query (git status, recent commits, read a file) → use direct tools (git_status, git_log, read_file). Faster, no worker round-trip.
 2. Code/file/build/test/commit work → dispatch_to_worker. The worker has full Claude Code capabilities (Edit, Bash, etc.) inside the project.
@@ -101,6 +110,8 @@ export type RendererControlAction =
   | { action: 'open-tab'; payload: { projectId: string } }
   | { action: 'close-tab'; payload: { tabId: string } }
   | { action: 'switch-tab'; payload: { tabId: string } }
+  | { action: 'spawn-parallel-worker'; payload: { projectId: string } }
+  | { action: 'get-workspace-state'; payload: Record<string, never> }
 
 export type RendererControlResult =
   | { ok: true; data?: unknown }
@@ -161,7 +172,9 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'open_tab',
   'close_tab',
   'switch_tab',
-  'open_url'
+  'open_url',
+  'get_workspace_state',
+  'spawn_parallel_worker'
 ] as const
 
 const BUILTIN_TOOLS_TO_BLOCK = [
@@ -592,6 +605,50 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           }
           return {
             content: [{ type: 'text' as const, text: 'active' }]
+          }
+        }
+      ),
+
+      tool(
+        'get_workspace_state',
+        'Get current workspace state, including whether Ultimate Developer Mode is active for any project. ALWAYS call this first before deciding how to dispatch — ULM mode changes the rules.',
+        {},
+        async () => {
+          const result = await rendererControl({
+            action: 'get-workspace-state',
+            payload: {}
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }]
+          }
+        }
+      ),
+
+      tool(
+        'spawn_parallel_worker',
+        'In Ultimate Developer Mode: spawn ANOTHER worker tab for the ULM project (multiple workers allowed for parallel sub-tasks). Returns the new tab info. Outside ULM, this falls back to open_tab behavior (reuses existing tab).',
+        {
+          projectId: z.string().describe('Project ID — must be the active ULM project')
+        },
+        async ({ projectId }) => {
+          const result = await rendererControl({
+            action: 'spawn-parallel-worker',
+            payload: { projectId }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }]
           }
         }
       ),

@@ -55,6 +55,7 @@ export default function App() {
   const [toast, setToast] = useState<ToastState | null>(null)
   const [masterCollapsed, setMasterCollapsed] = useState(false)
   const [masterHeight, setMasterHeight] = useState(MASTER_DEFAULT_HEIGHT)
+  const [ultimateModeProjectId, setUltimateModeProjectId] = useState<string | null>(null)
 
   const restoredRef = useRef(false)
   const prevTransitionRef = useRef<Map<string, { running: boolean; bell: boolean }>>(new Map())
@@ -156,9 +157,14 @@ export default function App() {
       const state = await window.api.state.load()
       if (cancelled || !state || !state.tabs?.length) return
 
-      // Strict: never restore duplicate tabs for same project. Keep first only.
+      const ulmId = state.ultimateModeProjectId ?? null
+      if (ulmId) setUltimateModeProjectId(ulmId)
+
+      // Dedupe by project EXCEPT in Ultimate Mode where multi-tab on the ULM
+      // project is allowed (workers parallelize).
       const seenProjectIds = new Set<string>()
       const dedupedStored = state.tabs.filter((s) => {
+        if (ulmId && s.projectId === ulmId) return true
         if (seenProjectIds.has(s.projectId)) return false
         seenProjectIds.add(s.projectId)
         return true
@@ -209,12 +215,13 @@ export default function App() {
     const t = setTimeout(() => {
       const state = {
         tabs: tabs.map((t) => ({ projectId: t.project.id, sessionId: t.sessionId })),
-        activeIndex: activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1
+        activeIndex: activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1,
+        ultimateModeProjectId
       }
       window.api.state.save(state).catch((e) => console.error('Save state failed:', e))
     }, STATE_SAVE_DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [tabs, activeTabId])
+  }, [tabs, activeTabId, ultimateModeProjectId])
 
   useEffect(() => {
     const unsub = window.api.pty.onData((ptyId, data) => {
@@ -334,12 +341,16 @@ export default function App() {
   }, [tabs, tabActivityStates])
 
   const openProject = useCallback(
-    async (project: Project, _opts: { newTab?: boolean } = {}) => {
-      // Strict no-duplicate rule: one tab per project. Always reuse if exists.
-      const existing = tabs.find((t) => t.project.id === project.id)
-      if (existing) {
-        setActiveTabId(existing.id)
-        return
+    async (project: Project, opts: { newTab?: boolean } = {}) => {
+      // ULM project: multi-tab allowed (workers parallelize). Use newTab flag.
+      // Other projects: strict single-tab; always reuse.
+      const isUlmProject = ultimateModeProjectId === project.id
+      if (!(isUlmProject && opts.newTab)) {
+        const existing = tabs.find((t) => t.project.id === project.id)
+        if (existing) {
+          setActiveTabId(existing.id)
+          return
+        }
       }
       const ptyId = await window.api.pty.spawn(project.path, { autoRun: 'claude' })
       const tab: Tab = {
@@ -350,7 +361,20 @@ export default function App() {
       setTabs((prev) => [...prev, tab])
       setActiveTabId(tab.id)
     },
-    [tabs]
+    [tabs, ultimateModeProjectId]
+  )
+
+  const toggleUltimateMode = useCallback(
+    (projectId: string | null) => {
+      setUltimateModeProjectId((curr) => {
+        // If toggling off the same project (or off entirely)
+        if (projectId === null || projectId === curr) return null
+        // Switching to a new project: clear other-project tabs from view focus
+        // (they stay alive, just hidden by the filter)
+        return projectId
+      })
+    },
+    []
   )
 
   const resumeSession = useCallback(
@@ -501,12 +525,16 @@ export default function App() {
 
   const projectsRef = useRef(projects)
   const tabsRef = useRef(tabs)
+  const ulmIdRef = useRef(ultimateModeProjectId)
   useEffect(() => {
     projectsRef.current = projects
   }, [projects])
   useEffect(() => {
     tabsRef.current = tabs
   }, [tabs])
+  useEffect(() => {
+    ulmIdRef.current = ultimateModeProjectId
+  }, [ultimateModeProjectId])
 
   useEffect(() => {
     return window.api.master.onControlRequest(async (req) => {
@@ -592,6 +620,64 @@ export default function App() {
           setActiveTabId(p.tabId)
           return respond({ ok: true })
         }
+        if (req.action === 'get-workspace-state') {
+          const ulmId = ulmIdRef.current
+          const ulmProject = ulmId
+            ? projectsRef.current.find((p) => p.id === ulmId)
+            : null
+          const ulmTabs = ulmId
+            ? tabsRef.current.filter((t) => t.project.id === ulmId)
+            : []
+          return respond({
+            ok: true,
+            data: {
+              ultimateMode: ulmProject
+                ? {
+                    projectId: ulmProject.id,
+                    projectName: ulmProject.name,
+                    projectPath: ulmProject.path,
+                    activeWorkerTabIds: ulmTabs.map((t) => t.id),
+                    workerCount: ulmTabs.length
+                  }
+                : null,
+              totalTabs: tabsRef.current.length,
+              totalProjects: projectsRef.current.length
+            }
+          })
+        }
+        if (req.action === 'spawn-parallel-worker') {
+          const p = req.payload as { projectId: string }
+          const project = projectsRef.current.find((x) => x.id === p.projectId)
+          if (!project) return respond({ ok: false, error: 'project not found' })
+          const ulmId = ulmIdRef.current
+          // Outside ULM: enforce single-tab; reuse if exists
+          if (ulmId !== p.projectId) {
+            const existing = tabsRef.current.find((t) => t.project.id === p.projectId)
+            if (existing) {
+              setActiveTabId(existing.id)
+              return respond({
+                ok: true,
+                data: { tabId: existing.id, ptyId: existing.ptyId, reused: true, ulm: false }
+              })
+            }
+          }
+          // Spawn fresh worker (multiple allowed in ULM)
+          const ptyId = await window.api.pty.spawn(project.path, { autoRun: 'claude' })
+          const tab: Tab = { id: crypto.randomUUID(), ptyId, project }
+          setTabs((prev) => [...prev, tab])
+          setActiveTabId(tab.id)
+          return respond({
+            ok: true,
+            data: {
+              tabId: tab.id,
+              ptyId: tab.ptyId,
+              projectId: project.id,
+              projectName: project.name,
+              ulm: ulmId === p.projectId,
+              reused: false
+            }
+          })
+        }
         respond({ ok: false, error: `unknown action ${req.action}` })
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) })
@@ -653,9 +739,15 @@ export default function App() {
       </header>
       <div className="body">
         <Sidebar
-          projects={projects}
+          projects={
+            ultimateModeProjectId
+              ? projects.filter((p) => p.id === ultimateModeProjectId)
+              : projects
+          }
+          allProjectCount={projects.length}
           activeProjectId={activeProjectId}
           projectStatus={projectStatus}
+          ultimateModeProjectId={ultimateModeProjectId}
           onSelect={(id, opts) => {
             const p = projects.find((p) => p.id === id)
             if (p) openProject(p, opts)
@@ -665,14 +757,32 @@ export default function App() {
           onRename={(id, newName) => updateProject(id, { name: newName })}
           onChangeColor={(id, color) => updateProject(id, { color })}
           onRemove={handleRemoveProject}
+          onToggleUltimateMode={toggleUltimateMode}
         />
         <main className="main">
           <TabStrip
-            tabs={tabs}
+            tabs={
+              ultimateModeProjectId
+                ? tabs.filter((t) => t.project.id === ultimateModeProjectId)
+                : tabs
+            }
             activeTabId={activeTabId}
             activityStates={tabActivityStates}
             onSelect={setActiveTabId}
             onClose={closeTab}
+            ultimateModeProjectName={
+              ultimateModeProjectId
+                ? projects.find((p) => p.id === ultimateModeProjectId)?.name
+                : undefined
+            }
+            onSpawnUltimateWorker={
+              ultimateModeProjectId
+                ? () => {
+                    const p = projects.find((px) => px.id === ultimateModeProjectId)
+                    if (p) openProject(p, { newTab: true })
+                  }
+                : undefined
+            }
           />
           <TerminalArea
             tabs={tabs}

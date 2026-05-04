@@ -8,6 +8,8 @@ interface Props {
   activityStates: Map<string, TabActivity>
   onSelect: (id: string) => void
   onClose: (id: string) => void
+  ultimateModeProjectName?: string
+  onSpawnUltimateWorker?: () => void
 }
 
 function tabTitle(tab: Tab, allTabs: Tab[]): string {
@@ -17,11 +19,36 @@ function tabTitle(tab: Tab, allTabs: Tab[]): string {
   return `${tab.project.name} · ${idx + 1}`
 }
 
-export function TabStrip({ tabs, activeTabId, activityStates, onSelect, onClose }: Props) {
+export function TabStrip({
+  tabs,
+  activeTabId,
+  activityStates,
+  onSelect,
+  onClose,
+  ultimateModeProjectName,
+  onSpawnUltimateWorker
+}: Props) {
   if (tabs.length === 0) {
     return (
       <div className="tabstrip">
-        <div className="tabstrip-empty">NO ACTIVE SESSIONS</div>
+        {ultimateModeProjectName ? (
+          <>
+            <div className="tabstrip-empty">
+              ULTIMATE MODE · {ultimateModeProjectName.toUpperCase()} · NO WORKERS YET
+            </div>
+            {onSpawnUltimateWorker && (
+              <button
+                type="button"
+                className="tabstrip-spawn-worker"
+                onClick={onSpawnUltimateWorker}
+              >
+                + SPAWN WORKER
+              </button>
+            )}
+          </>
+        ) : (
+          <div className="tabstrip-empty">NO ACTIVE SESSIONS</div>
+        )}
       </div>
     )
   }
@@ -76,6 +103,16 @@ export function TabStrip({ tabs, activeTabId, activityStates, onSelect, onClose 
           </div>
         )
       })}
+      {onSpawnUltimateWorker && (
+        <button
+          type="button"
+          className="tabstrip-spawn-worker tabstrip-spawn-worker-inline"
+          onClick={onSpawnUltimateWorker}
+          title="Spawn parallel worker for this project"
+        >
+          + WORKER
+        </button>
+      )}
     </div>
   )
 }

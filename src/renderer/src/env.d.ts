@@ -80,6 +80,7 @@ interface StatsApi {
 interface StoredAppStateShape {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
+  ultimateModeProjectId?: string | null
 }
 
 interface StateApi {

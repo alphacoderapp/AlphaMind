@@ -25,6 +25,7 @@ interface ClaudeSession {
 interface StoredAppState {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
+  ultimateModeProjectId?: string | null
 }
 
 interface ResizeImageResult {

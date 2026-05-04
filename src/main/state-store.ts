@@ -6,6 +6,7 @@ import { existsSync } from 'fs'
 export interface StoredAppState {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
+  ultimateModeProjectId?: string | null
 }
 
 const STORE_DIR = join(app.getPath('home'), '.simple-claude')

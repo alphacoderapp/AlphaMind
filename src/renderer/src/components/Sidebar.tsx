@@ -11,26 +11,32 @@ const COLORS = ['#22d3ee', '#34d399', '#e879f9', '#fbbf24', '#a78bfa', '#fb7185'
 
 interface Props {
   projects: Project[]
+  allProjectCount: number
   activeProjectId: string | null
   projectStatus: Map<string, ProjectStatus>
+  ultimateModeProjectId: string | null
   onSelect: (id: string, opts: { newTab: boolean }) => void
   onResumeSession: (project: Project, sessionId: string) => void
   onAdd: () => void
   onRename: (id: string, newName: string) => void
   onChangeColor: (id: string, color: string) => void
   onRemove: (id: string) => void
+  onToggleUltimateMode: (projectId: string | null) => void
 }
 
 export function Sidebar({
   projects,
+  allProjectCount,
   activeProjectId,
   projectStatus,
+  ultimateModeProjectId,
   onSelect,
   onResumeSession,
   onAdd,
   onRename,
   onChangeColor,
-  onRemove
+  onRemove,
+  onToggleUltimateMode
 }: Props) {
   const [menu, setMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -90,6 +96,20 @@ export function Sidebar({
           +
         </button>
       </div>
+      {ultimateModeProjectId && (
+        <div className="sidebar-ulm-banner">
+          <span className="sidebar-ulm-banner-dot" />
+          <span className="sidebar-ulm-banner-text">ULTIMATE MODE</span>
+          <button
+            type="button"
+            className="sidebar-ulm-banner-exit"
+            onClick={() => onToggleUltimateMode(null)}
+            title="Exit Ultimate Mode"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="sidebar-list">
         {projects.length === 0 && (
           <div className="sidebar-empty">
@@ -161,19 +181,50 @@ export function Sidebar({
                 <span className={`sidebar-item-dot${dotClass}`} />
               </div>
               {expanded.has(p.id) && (
-                <SessionList
-                  sessions={sessions.get(p.id) ?? []}
-                  loading={loadingSessions.has(p.id)}
-                  accent={p.color}
-                  onSelect={(sessionId) => onResumeSession(p, sessionId)}
-                />
+                <>
+                  <div className="sidebar-settings-panel">
+                    <button
+                      type="button"
+                      className={`sidebar-ulm-toggle${ultimateModeProjectId === p.id ? ' active' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleUltimateMode(
+                          ultimateModeProjectId === p.id ? null : p.id
+                        )
+                      }}
+                      style={{ '--accent': p.color } as CSSProperties}
+                    >
+                      <span className="sidebar-ulm-dot" />
+                      <span className="sidebar-ulm-label">
+                        ULTIMATE DEVELOPER MODE
+                      </span>
+                      <span className="sidebar-ulm-state">
+                        {ultimateModeProjectId === p.id ? 'ON' : 'OFF'}
+                      </span>
+                    </button>
+                    {ultimateModeProjectId === p.id && (
+                      <div className="sidebar-ulm-hint">
+                        Multiple parallel workers allowed. Master coordinates and
+                        commits centrally.
+                      </div>
+                    )}
+                  </div>
+                  <SessionList
+                    sessions={sessions.get(p.id) ?? []}
+                    loading={loadingSessions.has(p.id)}
+                    accent={p.color}
+                    onSelect={(sessionId) => onResumeSession(p, sessionId)}
+                  />
+                </>
               )}
             </Fragment>
           )
         })}
       </div>
       <div className="sidebar-footer">
-        <span className="micro-label">{projects.length} TOTAL</span>
+        <span className="micro-label">
+          {ultimateModeProjectId ? `1 OF ${allProjectCount} (ULM)` : `${allProjectCount} TOTAL`}
+        </span>
       </div>
 
       {menu && (
