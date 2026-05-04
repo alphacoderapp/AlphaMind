@@ -1,6 +1,6 @@
 {
   "name": "simple-claude",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-project Claude Code wrapper",
   "main": "./out/main/index.js",
   "author": "Martin",
@@ -50,7 +50,7 @@
       "darkModeSupport": true,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": "-"
+      "identity": "Apple Development: Martin Nisu (28MFG37X6M)"
     },
     "publish": {
       "provider": "github",
