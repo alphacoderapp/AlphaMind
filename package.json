@@ -1,0 +1,85 @@
+{
+  "name": "simple-claude",
+  "version": "0.1.1",
+  "description": "Multi-project Claude Code wrapper",
+  "main": "./out/main/index.js",
+  "author": "Martin",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "type-check": "tsc --noEmit",
+    "icon": "node scripts/generate-icon.mjs",
+    "package:mac": "npm run icon && electron-vite build && electron-builder --mac",
+    "release": "npm run icon && electron-vite build && electron-builder --mac --publish=always",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "ee.maailmameedia.simpleclaude",
+    "productName": "Simple Claude",
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/node-pty/**/*"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.png",
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": "-"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "alphacoderapp",
+      "repo": "AlphaMind"
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "electron-updater": "^6.8.3",
+    "node-pty": "^1.0.0",
+    "react-markdown": "^10.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sharp": "^0.33.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
