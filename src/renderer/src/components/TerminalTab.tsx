@@ -9,9 +9,10 @@ interface Props {
   active: boolean
   onRestart: (tabId: string) => void
   onRepath: (tabId: string) => void
+  onRemoveProject: (projectId: string) => void
 }
 
-export function TerminalTab({ tab, active, onRestart, onRepath }: Props) {
+export function TerminalTab({ tab, active, onRestart, onRepath, onRemoveProject }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -221,37 +222,51 @@ export function TerminalTab({ tab, active, onRestart, onRepath }: Props) {
             </div>
             <div className="terminal-ended-actions">
               {pathMissing ? (
-                <button
-                  type="button"
-                  className="terminal-ended-restart"
-                  onClick={() => onRepath(tab.id)}
-                >
-                  ⌕ Pick New Folder
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="terminal-ended-restart"
+                    onClick={() => onRepath(tab.id)}
+                  >
+                    ⌕ Pick New Folder
+                  </button>
+                  <button
+                    type="button"
+                    className="terminal-ended-secondary"
+                    onClick={() => {
+                      const confirmed = window.confirm(
+                        `Remove "${tab.project.name}" from sidebar? This deletes only the project entry, not any files.`
+                      )
+                      if (confirmed) onRemoveProject(tab.project.id)
+                    }}
+                  >
+                    Remove Project
+                  </button>
+                </>
               ) : (
-                <button
-                  type="button"
-                  className="terminal-ended-restart"
-                  onClick={handleRestart}
-                  disabled={restarting}
-                >
-                  {restarting
-                    ? failedToStart
-                      ? 'Trying again…'
-                      : 'Resuming…'
-                    : failedToStart
-                      ? '↻ Try Again'
-                      : '↻ Resume Session'}
-                </button>
-              )}
-              {!pathMissing && (
-                <button
-                  type="button"
-                  className="terminal-ended-secondary"
-                  onClick={handleOpenFolder}
-                >
-                  Open in Finder
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="terminal-ended-restart"
+                    onClick={handleRestart}
+                    disabled={restarting}
+                  >
+                    {restarting
+                      ? failedToStart
+                        ? 'Trying again…'
+                        : 'Resuming…'
+                      : failedToStart
+                        ? '↻ Try Again'
+                        : '↻ Resume Session'}
+                  </button>
+                  <button
+                    type="button"
+                    className="terminal-ended-secondary"
+                    onClick={handleOpenFolder}
+                  >
+                    Open in Finder
+                  </button>
+                </>
               )}
             </div>
           </div>

@@ -679,6 +679,7 @@ export default function App() {
             activeTabId={activeTabId}
             onRestart={restartTab}
             onRepath={repathTab}
+            onRemoveProject={handleRemoveProject}
           />
           <MasterPane
             collapsed={masterCollapsed}

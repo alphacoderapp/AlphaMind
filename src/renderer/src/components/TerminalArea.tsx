@@ -6,9 +6,16 @@ interface Props {
   activeTabId: string | null
   onRestart: (tabId: string) => void
   onRepath: (tabId: string) => void
+  onRemoveProject: (projectId: string) => void
 }
 
-export function TerminalArea({ tabs, activeTabId, onRestart, onRepath }: Props) {
+export function TerminalArea({
+  tabs,
+  activeTabId,
+  onRestart,
+  onRepath,
+  onRemoveProject
+}: Props) {
   if (tabs.length === 0) {
     return (
       <div className="terminal-area terminal-area-empty">
@@ -29,6 +36,7 @@ export function TerminalArea({ tabs, activeTabId, onRestart, onRepath }: Props) 
           active={tab.id === activeTabId}
           onRestart={onRestart}
           onRepath={onRepath}
+          onRemoveProject={onRemoveProject}
         />
       ))}
     </div>
