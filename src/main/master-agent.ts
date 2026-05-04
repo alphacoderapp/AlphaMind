@@ -54,8 +54,14 @@ CRITICAL UX CONTRACT:
 - The user ONLY talks to you, in this one chat. They never type into project tabs.
 - NEVER tell the user "go to the X tab" or "type Y in project". You execute everything.
 - If work belongs in a project (edit code, run command, commit, test, debug, build), DISPATCH to that project's worker. Never describe steps for the user to do.
-- When a worker reports a URL (localhost server, deploy URL, anything that needs a browser), AUTO-OPEN it immediately via open_url. Do NOT write "Open http://..." for the user. Do NOT write "Visit example.com" — call open_url and just confirm "opened in browser".
-- Never write "How to test:" / "Kuidas katsetada:" sections with manual steps. If something needs to happen, you do it (dispatch + open_url). The only output to user is a status report of what already happened.
+- dispatch_to_worker AUTO-DETECTS URLs in worker output and auto-opens them in the browser. If you see "[URL DETECTED: ... already opened in user's browser]" in the dispatch result, the browser is ALREADY OPEN — do NOT call open_url again for the same URL. Just mention it in your reply: "Avatud: <url>".
+- For "run/start dev server / pane käima" tasks, ALWAYS dispatch_to_worker and trust its URL detection. Never guess ports (no "tüüpiliselt localhost:3000"). If no URL was detected, the worker is probably still building — say so and let user wait, do NOT invent ports.
+- Never write "How to test:" / "Kuidas katsetada:" sections with manual steps. If something needs to happen, you do it. The only output to user is a status report of what already happened.
+
+KNOWLEDGE BOUNDARY:
+- You know NOTHING about the user's projects beyond what list_open_tabs / list_all_projects / git_status / read_file / dispatch_to_worker tell you in THIS conversation. No prior project knowledge cached.
+- When the user asks "what does X do" / "mis X teeb", call read_file (e.g. README.md, package.json, CLAUDE.md inside the project) or dispatch_to_worker to ask the project's own claude. Never make up architecture details from general knowledge.
+- If you don't know, say so and propose calling a tool. Don't fabricate.
 
 ROUTING DECISIONS:
 1. Pure metadata query (git status, recent commits, read a file) → use direct tools (git_status, git_log, read_file). Faster, no worker round-trip.
@@ -136,7 +142,10 @@ async function getSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
 
 const POLL_INTERVAL_MS = 100
 const IDLE_THRESHOLD_MS = 600
-const DEFAULT_DISPATCH_TIMEOUT_MS = 30000
+const DEFAULT_DISPATCH_TIMEOUT_MS = 60000
+
+// Extract URLs from worker output. Common patterns: localhost ports, deploy URLs.
+const URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9.-]+|localhost)(?::\d+)?(?:\/[^\s\x1b'"<>)]*)?/g
 
 const ORCHESTRATOR_TOOL_NAMES = [
   'list_open_tabs',
@@ -256,15 +265,45 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
           const totalTimeout = timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS
           const deadline = Date.now() + totalTimeout
-          let final: 'idle' | 'timeout' = 'timeout'
+          let final: 'idle' | 'timeout' | 'url-detected' = 'timeout'
           let lastTickAt = 0
+          let detectedUrl: string | null = null
+          let urlDetectedAt = 0
+
           while (Date.now() < deadline) {
             const last = ptyManager.getLastDataTime(tab.ptyId) ?? startTs
+
+            // Detect URL once and auto-open browser. Filter out the master's own
+            // compression-prefix mention of any URLs the user typed.
+            if (!detectedUrl) {
+              const cleaned = stripAnsi(ptyManager.getBuffer(tab.ptyId, startTs))
+              const matches = cleaned.match(URL_REGEX)
+              if (matches && matches.length > 0) {
+                // Pick the last URL (most recent in output, usually the actual server URL)
+                const candidate = matches[matches.length - 1]!.replace(/[.,;:]+$/, '')
+                detectedUrl = candidate
+                urlDetectedAt = Date.now()
+                try {
+                  await shell.openExternal(detectedUrl)
+                } catch {
+                  /* noop */
+                }
+              }
+            }
+
+            // Idle = worker finished (claude returned to prompt). Return immediately.
             if (Date.now() - last > IDLE_THRESHOLD_MS) {
-              final = 'idle'
+              final = detectedUrl ? 'url-detected' : 'idle'
               break
             }
-            // Tick every ~250ms with last few stripped lines
+
+            // If URL detected and 1.5s elapsed, return early (server is up, no need
+            // to wait for full idle since dev servers run forever)
+            if (detectedUrl && Date.now() - urlDetectedAt > 1500) {
+              final = 'url-detected'
+              break
+            }
+
             if (Date.now() - lastTickAt > 250) {
               lastTickAt = Date.now()
               const buf = ptyManager.getBuffer(tab.ptyId, startTs)
@@ -286,16 +325,22 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           broadcastWorkerActivity({
             tabId,
             projectName: tab.projectName,
-            status: final === 'idle' ? 'done' : 'timeout',
+            status: final === 'timeout' ? 'timeout' : 'done',
             elapsedMs: Date.now() - startTs,
-            snippet: tail(cleaned, 6).slice(-500)
+            snippet: detectedUrl
+              ? `Server up at ${detectedUrl} (browser opened)`
+              : tail(cleaned, 6).slice(-500)
           })
+
+          const urlLine = detectedUrl
+            ? `\n[URL DETECTED: ${detectedUrl} — already opened in user's browser; do NOT call open_url for this URL]`
+            : ''
 
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `[${final} after ${Date.now() - startTs}ms · project=${tab.projectName}]\n${cleaned || '(no output)'}`
+                text: `[${final} after ${Date.now() - startTs}ms · project=${tab.projectName}]${urlLine}\n${cleaned || '(no output)'}`
               }
             ]
           }
@@ -608,13 +653,14 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         permissionMode: 'bypassPermissions',
         cwd: process.env.HOME || '/',
         model: 'claude-haiku-4-5',
+        // Isolate master from user-level memory/settings. Without this, master
+        // pulls ~/.claude/projects/*/memory/*.md into context and answers project
+        // questions from cached general knowledge instead of the actual project.
+        settingSources: [],
         // Master must only use orchestrator MCP tools. Both:
         //  - tools: [] disables ALL built-in tools (Bash/Read/Write/Edit/etc)
         //  - disallowedTools: explicit blocklist as belt-and-suspenders
         //  - allowedTools: orchestrator MCPs auto-approved (no permission prompts)
-        // This prevents macOS TCC prompts (Music/Documents/Photos) from
-        // incidental Bash filesystem walks, AND keeps master strictly an
-        // orchestrator — workers do all real fs/shell work.
         tools: [],
         disallowedTools: BUILTIN_TOOLS_TO_BLOCK,
         allowedTools: ORCHESTRATOR_TOOL_NAMES.map((n) => `mcp__orchestrator__${n}`)
