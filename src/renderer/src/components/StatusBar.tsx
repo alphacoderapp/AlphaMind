@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Tab } from '../types'
 
-const APP_VERSION = '0.1.7'
+const APP_VERSION = '0.1.8'
 
 interface UpdateState {
   available: boolean

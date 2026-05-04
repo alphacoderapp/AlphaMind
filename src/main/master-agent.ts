@@ -127,6 +127,22 @@ const POLL_INTERVAL_MS = 100
 const IDLE_THRESHOLD_MS = 600
 const DEFAULT_DISPATCH_TIMEOUT_MS = 30000
 
+const ORCHESTRATOR_TOOL_NAMES = [
+  'list_open_tabs',
+  'list_all_projects',
+  'dispatch_to_worker',
+  'inject_prompt',
+  'read_output',
+  'wait_for_idle',
+  'git_status',
+  'git_log',
+  'read_file',
+  'create_project',
+  'open_tab',
+  'close_tab',
+  'switch_tab'
+] as const
+
 async function waitForIdle(
   ptyManager: PtyManager,
   ptyId: string,
@@ -538,7 +554,11 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         mcpServers: { orchestrator: orchestratorServer },
         permissionMode: 'bypassPermissions',
         cwd: process.env.HOME || '/',
-        model: 'claude-haiku-4-5'
+        model: 'claude-haiku-4-5',
+        // Master must only use orchestrator MCP tools. No Bash/Read/Write/Edit
+        // on the user's machine — workers handle that. This prevents macOS TCC
+        // prompts (Music/Documents/Photos) from incidental Bash filesystem walks.
+        allowedTools: ORCHESTRATOR_TOOL_NAMES.map((n) => `mcp__orchestrator__${n}`)
       }
       if (claudeBin) queryOptions.pathToClaudeCodeExecutable = claudeBin
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
