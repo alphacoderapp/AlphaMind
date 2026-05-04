@@ -133,8 +133,6 @@ function setupMenu(): void {
           click: () => sendAction('help')
         },
         { type: 'separator' },
-        { role: 'reload' },
-        { role: 'forceReload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
         { role: 'togglefullscreen' }
@@ -171,6 +169,17 @@ async function createWindow(): Promise<BrowserWindow> {
   })
 
   attachWindowState(win)
+
+  // Block accidental Cmd+R / Cmd+Shift+R reload — destructive for a desktop app
+  // (would kill PTYs, lose master history buffer, etc). DevTools still allowed.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (
+      (input.meta || input.control) &&
+      input.key.toLowerCase() === 'r'
+    ) {
+      event.preventDefault()
+    }
+  })
 
   win.on('ready-to-show', () => win.show())
 
