@@ -1,6 +1,6 @@
 {
   "name": "simple-claude",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Multi-project Claude Code wrapper",
   "main": "./out/main/index.js",
   "author": "Martin",
@@ -19,7 +19,8 @@
     "productName": "Simple Claude",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/node-pty/**/*"
+      "**/node_modules/node-pty/**/*",
+      "**/node_modules/@anthropic-ai/claude-agent-sdk-*-*/**/*"
     ],
     "directories": {
       "output": "dist",

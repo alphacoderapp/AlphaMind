@@ -1,8 +1,48 @@
 import { z } from 'zod'
+import { app } from 'electron'
+import { join, sep } from 'path'
+import { existsSync } from 'fs'
 import type { PtyManager } from './pty-manager'
 import { tabRegistry } from './tab-registry'
 import { getProjectStats } from './project-stats'
 import { loadProjects } from './projects-store'
+
+function resolveClaudeCodeBinary(): string | undefined {
+  if (!app.isPackaged) return undefined
+  const platform = process.platform
+  const arch = process.arch
+  const rel = join(
+    'node_modules',
+    `@anthropic-ai`,
+    `claude-agent-sdk-${platform}-${arch}`,
+    'claude'
+  )
+  const candidates = [
+    join(process.resourcesPath, 'app.asar.unpacked', rel),
+    join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'node_modules',
+      '@anthropic-ai',
+      'claude-agent-sdk',
+      rel
+    )
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  try {
+    const resolved = require.resolve(`@anthropic-ai/claude-agent-sdk-${platform}-${arch}/claude`)
+    const marker = `${sep}app.asar${sep}`
+    if (resolved.includes(marker)) {
+      const unpacked = resolved.split(marker).join(`${sep}app.asar.unpacked${sep}`)
+      if (existsSync(unpacked)) return unpacked
+    }
+    return resolved
+  } catch {
+    return undefined
+  }
+}
 
 const COMPRESSION_PREFIX = `Respond compressed style: drop articles, fragments not sentences, abbreviate where unambiguous. Preserve code/paths/identifiers exact. Keep all technical facts (errors, line numbers, fix details). Be specific and short.
 
@@ -301,15 +341,17 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         promptText = `Recent conversation context (for continuity):\n\n${transcript}\n\n---\nNEW USER MESSAGE: ${userMessage}`
       }
 
+      const claudeBin = resolveClaudeCodeBinary()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream = (query as any)({
-        prompt: promptText,
-        options: {
-          systemPrompt: SYSTEM_PROMPT,
-          mcpServers: { orchestrator: orchestratorServer },
-          permissionMode: 'bypassPermissions'
-        }
-      })
+      const queryOptions: any = {
+        systemPrompt: SYSTEM_PROMPT,
+        mcpServers: { orchestrator: orchestratorServer },
+        permissionMode: 'bypassPermissions',
+        cwd: process.env.HOME || '/'
+      }
+      if (claudeBin) queryOptions.pathToClaudeCodeExecutable = claudeBin
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stream = (query as any)({ prompt: promptText, options: queryOptions })
 
       for await (const event of stream) {
         yield event
