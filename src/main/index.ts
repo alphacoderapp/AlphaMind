@@ -19,12 +19,37 @@ import { loadState, saveState, type StoredAppState } from './state-store'
 import { loadWindowBounds, attachWindowState } from './window-state'
 import { getProjectStats, clearProjectStatsCache } from './project-stats'
 import { tabRegistry, type TabInfo } from './tab-registry'
-import { createMasterAgent } from './master-agent'
+import {
+  createMasterAgent,
+  type RendererControlAction,
+  type RendererControlResult
+} from './master-agent'
 import { setupAutoUpdater, openReleasesPage, manualCheck } from './auto-updater'
 
 const ptyManager = new PtyManager()
-const masterAgent = createMasterAgent({ ptyManager })
 let mainWindow: BrowserWindow | null = null
+
+const masterControlPending = new Map<string, (result: RendererControlResult) => void>()
+
+function rendererControl(req: RendererControlAction): Promise<RendererControlResult> {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve({ ok: false, error: 'No window' })
+      return
+    }
+    const requestId = randomUUID()
+    masterControlPending.set(requestId, resolve)
+    mainWindow.webContents.send('master-control:request', { requestId, ...req })
+    setTimeout(() => {
+      if (masterControlPending.has(requestId)) {
+        masterControlPending.delete(requestId)
+        resolve({ ok: false, error: `${req.action} timeout` })
+      }
+    }, 15000)
+  })
+}
+
+const masterAgent = createMasterAgent({ ptyManager, rendererControl })
 
 function sendAction(action: string): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -297,6 +322,18 @@ ipcMain.handle(
     })()
 
     return requestId
+  }
+)
+
+// Master-control: renderer responds to project/tab actions requested by master
+ipcMain.on(
+  'master-control:response',
+  (_event, payload: { requestId: string; result: RendererControlResult }) => {
+    const resolver = masterControlPending.get(payload.requestId)
+    if (resolver) {
+      masterControlPending.delete(payload.requestId)
+      resolver(payload.result)
+    }
   }
 )
 

@@ -423,6 +423,89 @@ export default function App() {
     [tabs, activeTabId, removeProject]
   )
 
+  const projectsRef = useRef(projects)
+  const tabsRef = useRef(tabs)
+  useEffect(() => {
+    projectsRef.current = projects
+  }, [projects])
+  useEffect(() => {
+    tabsRef.current = tabs
+  }, [tabs])
+
+  useEffect(() => {
+    return window.api.master.onControlRequest(async (req) => {
+      const respond = (
+        result: { ok: true; data?: unknown } | { ok: false; error: string }
+      ): void => {
+        window.api.master.respondControl(req.requestId, result)
+      }
+      try {
+        if (req.action === 'create-project') {
+          const p = req.payload as { path: string; name?: string; color?: string }
+          if (!p.path) return respond({ ok: false, error: 'path required' })
+          if (projectsRef.current.find((x) => x.path === p.path)) {
+            return respond({ ok: false, error: 'project with this path exists' })
+          }
+          const palette = ['#34d399', '#60a5fa', '#f59e0b', '#a78bfa', '#f87171', '#22d3ee']
+          const project: Project = {
+            id: crypto.randomUUID(),
+            name: p.name || p.path.split('/').filter(Boolean).pop() || p.path,
+            color: p.color || palette[Math.floor(Math.random() * palette.length)]!,
+            path: p.path
+          }
+          await addProject(project)
+          return respond({
+            ok: true,
+            data: { id: project.id, name: project.name, path: project.path, color: project.color }
+          })
+        }
+        if (req.action === 'open-tab') {
+          const p = req.payload as { projectId: string }
+          const project = projectsRef.current.find((x) => x.id === p.projectId)
+          if (!project) return respond({ ok: false, error: 'project not found' })
+          const ptyId = await window.api.pty.spawn(project.path, { autoRun: 'claude' })
+          const tab: Tab = { id: crypto.randomUUID(), ptyId, project }
+          setTabs((prev) => [...prev, tab])
+          setActiveTabId(tab.id)
+          return respond({
+            ok: true,
+            data: {
+              tabId: tab.id,
+              ptyId: tab.ptyId,
+              projectId: project.id,
+              projectName: project.name,
+              projectPath: project.path
+            }
+          })
+        }
+        if (req.action === 'close-tab') {
+          const p = req.payload as { tabId: string }
+          const tab = tabsRef.current.find((t) => t.id === p.tabId)
+          if (!tab) return respond({ ok: false, error: 'tab not found' })
+          window.api.pty.kill(tab.ptyId)
+          setTabs((prev) => prev.filter((t) => t.id !== p.tabId))
+          setActiveTabId((curr) => {
+            if (curr !== p.tabId) return curr
+            const rest = tabsRef.current.filter((t) => t.id !== p.tabId)
+            return rest.length > 0 ? rest[rest.length - 1]!.id : null
+          })
+          return respond({ ok: true })
+        }
+        if (req.action === 'switch-tab') {
+          const p = req.payload as { tabId: string }
+          if (!tabsRef.current.find((t) => t.id === p.tabId)) {
+            return respond({ ok: false, error: 'tab not found' })
+          }
+          setActiveTabId(p.tabId)
+          return respond({ ok: true })
+        }
+        respond({ ok: false, error: `unknown action ${req.action}` })
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+  }, [addProject])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey) return

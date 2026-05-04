@@ -44,53 +44,56 @@ function resolveClaudeCodeBinary(): string | undefined {
   }
 }
 
-const COMPRESSION_PREFIX = `Respond compressed style: drop articles, fragments not sentences, abbreviate where unambiguous. Preserve code/paths/identifiers exact. Keep all technical facts (errors, line numbers, fix details). Be specific and short.
+const COMPRESSION_PREFIX = `Compressed output: fragments not sentences, abbreviate, drop articles. Keep code/paths/identifiers exact. Be specific and short.
 
 Task: `
 
-const SYSTEM_PROMPT = `You are MASTER, an orchestrator AI for the user's project workspace in Simple Claude.
+const SYSTEM_PROMPT = `You are MASTER, a fast orchestrator AI for the user's project workspace in Simple Claude.
 
-The user has multiple Claude Code sessions running in project tabs. You manage all projects from this single chat window.
+The user has multiple Claude Code sessions in project tabs. You manage everything from one chat.
 
-YOUR ROLE:
-- Use tools to gather information about projects
-- Dispatch work to project Claudes via inject_prompt (writes into their session)
-- Synthesize results into concise overviews for the user
-- Ask clarifying questions when intent ambiguous
+PRIMARY TOOLS (prefer these — they are FAST):
+- read_file, git_status, git_log → direct facts, no worker needed
+- list_open_tabs, list_all_projects → workspace state
+- create_project / open_tab / close_tab / switch_tab → workspace control
+- dispatch_to_worker(tabId, prompt) → injects, waits, reads in ONE call. Prefer over inject_prompt+wait+read.
 
-RESPONSE FORMAT (ALWAYS):
-- Start with 1-sentence summary
-- Then bullets with status icons:
-  - ✓ done
-  - ⚠ needs attention
-  - ✗ failed
-  - × skipped
-  - ⌛ in progress
-- Maximum 3-6 bullets typically
+LEGACY TOOLS (avoid unless dispatch_to_worker is unsuitable):
+- inject_prompt, wait_for_idle, read_output
+
+RESPONSE FORMAT:
+- 1-sentence summary first
+- Bullets with: ✓ done · ⚠ needs attn · ✗ failed · × skipped · ⌛ in progress
+- Max 3-6 bullets
+- \`code\` for paths/commands
 - No preamble, no recap, no apologies
-- Use \`code\` formatting for paths/commands
 
-WHEN DISPATCHING TO WORKERS:
-- Workers are project Claude Code instances. inject_prompt writes into their PTY session.
-- The tool prefixes your task with compression instructions automatically.
-- Use wait_for_idle after inject_prompt to know when worker finished
-- Use read_output to read what worker produced
-- Parse compressed output, synthesize into bullet for user
+WHEN NOT TO DISPATCH:
+- Cheap tools answer it (read_file, git_status) → use those
+- Spawning a worker is slow; prefer direct tools
 
-WHEN NOT TO DISPATCH (preferred):
-- If cheap tools answer it (read_file, git_status, list_open_tabs, list_all_projects), use those
-- Spawning a Claude is expensive; prefer direct file/git access for facts
+WORKSPACE MUTATION:
+- create_project + open_tab → spin up new tab from a folder path
+- open_tab(projectId) → opens existing project as a fresh tab
+- close_tab / switch_tab → manage focus
 
-PARALLEL WORK:
-- When tasks across multiple projects are independent, use inject_prompt for all in sequence then wait_for_idle for each. Tools run in parallel naturally when called within one assistant turn.
+Be JARVIS-fast. No fluff.`
 
-Always use the most efficient path. Be JARVIS, not a chatty assistant.`
+export type RendererControlAction =
+  | { action: 'create-project'; payload: { path: string; name?: string; color?: string } }
+  | { action: 'open-tab'; payload: { projectId: string } }
+  | { action: 'close-tab'; payload: { tabId: string } }
+  | { action: 'switch-tab'; payload: { tabId: string } }
+
+export type RendererControlResult =
+  | { ok: true; data?: unknown }
+  | { ok: false; error: string }
 
 interface MasterAgentDeps {
   ptyManager: PtyManager
+  rendererControl: (req: RendererControlAction) => Promise<RendererControlResult>
 }
 
-// Lazy-loaded ESM module (claude-agent-sdk is ESM, our main is CJS, must use dynamic import)
 let sdkPromise: Promise<typeof import('@anthropic-ai/claude-agent-sdk')> | null = null
 async function getSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')> {
   if (!sdkPromise) {
@@ -99,8 +102,27 @@ async function getSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
   return sdkPromise
 }
 
+const POLL_INTERVAL_MS = 100
+const IDLE_THRESHOLD_MS = 600
+const DEFAULT_DISPATCH_TIMEOUT_MS = 30000
+
+async function waitForIdle(
+  ptyManager: PtyManager,
+  ptyId: string,
+  timeoutMs: number,
+  startTs: number
+): Promise<'idle' | 'timeout'> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const last = ptyManager.getLastDataTime(ptyId) ?? startTs
+    if (Date.now() - last > IDLE_THRESHOLD_MS) return 'idle'
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+  }
+  return 'timeout'
+}
+
 export function createMasterAgent(deps: MasterAgentDeps) {
-  const { ptyManager } = deps
+  const { ptyManager, rendererControl } = deps
 
   let serverCache: unknown = null
 
@@ -111,7 +133,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
     const orchestratorTools = [
       tool(
         'list_open_tabs',
-        'List all currently open project tabs with their state. Returns array of {tabId, projectId, projectName, projectPath, projectColor, sessionId, isActive}.',
+        'List currently open project tabs.',
         {},
         async () => {
           const tabs = tabRegistry.getAll()
@@ -123,7 +145,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'list_all_projects',
-        'List all configured projects (open or not). Returns array of {id, name, path, color}.',
+        'List all configured projects.',
         {},
         async () => {
           const projects = (await loadProjects()) ?? []
@@ -134,11 +156,55 @@ export function createMasterAgent(deps: MasterAgentDeps) {
       ),
 
       tool(
-        'inject_prompt',
-        'Send a prompt to a specific project tab. Auto-prefixes with compression instructions so worker responds tersely. Returns immediately; use wait_for_idle then read_output to see worker response.',
+        'dispatch_to_worker',
+        'Inject prompt into project tab, wait for worker to finish, return output. Single round-trip. Use this over inject_prompt+wait_for_idle+read_output.',
         {
           tabId: z.string().describe('Tab ID from list_open_tabs'),
-          prompt: z.string().describe('Task for the project Claude')
+          prompt: z.string().describe('Task for the worker'),
+          timeoutMs: z
+            .number()
+            .optional()
+            .describe(`Max wait ms (default ${DEFAULT_DISPATCH_TIMEOUT_MS})`)
+        },
+        async ({ tabId, prompt, timeoutMs }) => {
+          const tab = tabRegistry.get(tabId)
+          if (!tab) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: tab ${tabId} not found` }],
+              isError: true
+            }
+          }
+          const startTs = Date.now()
+          const fullPrompt = COMPRESSION_PREFIX + prompt
+          ptyManager.write(tab.ptyId, fullPrompt)
+          await new Promise((r) => setTimeout(r, 80))
+          ptyManager.write(tab.ptyId, '\r')
+
+          const result = await waitForIdle(
+            ptyManager,
+            tab.ptyId,
+            timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS,
+            startTs
+          )
+          const output = ptyManager.getBuffer(tab.ptyId, startTs)
+          const status = result === 'idle' ? 'idle' : 'timeout'
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `[${status} after ${Date.now() - startTs}ms]\n${output || '(no output)'}`
+              }
+            ]
+          }
+        }
+      ),
+
+      tool(
+        'inject_prompt',
+        'Send prompt to a tab without waiting. Use dispatch_to_worker instead unless you need fire-and-forget.',
+        {
+          tabId: z.string().describe('Tab ID'),
+          prompt: z.string().describe('Task for the worker')
         },
         async ({ tabId, prompt }) => {
           const tab = tabRegistry.get(tabId)
@@ -149,27 +215,21 @@ export function createMasterAgent(deps: MasterAgentDeps) {
             }
           }
           const fullPrompt = COMPRESSION_PREFIX + prompt
-          ptyManager.write(tab.ptyId, fullPrompt + '\r')
+          ptyManager.write(tab.ptyId, fullPrompt)
+          await new Promise((r) => setTimeout(r, 80))
+          ptyManager.write(tab.ptyId, '\r')
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `Sent to ${tab.projectName}. Use wait_for_idle (tabId: ${tabId}) then read_output.`
-              }
-            ]
+            content: [{ type: 'text' as const, text: `Sent to ${tab.projectName}` }]
           }
         }
       ),
 
       tool(
         'read_output',
-        'Read recent output from a project tab. Returns text from rolling buffer (last ~200KB).',
+        'Read recent output from a tab.',
         {
           tabId: z.string().describe('Tab ID'),
-          sinceMs: z
-            .number()
-            .optional()
-            .describe('Optional unix ms timestamp; only returns output since this time')
+          sinceMs: z.number().optional().describe('Unix ms timestamp filter')
         },
         async ({ tabId, sinceMs }) => {
           const tab = tabRegistry.get(tabId)
@@ -188,10 +248,10 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'wait_for_idle',
-        'Wait until a project tab has been silent for at least 2s (Claude finished). Returns when idle or timeout.',
+        'Wait for tab to finish (idle threshold ~600ms). Returns idle or timeout.',
         {
           tabId: z.string().describe('Tab ID'),
-          timeoutMs: z.number().optional().describe('Max wait in ms (default 60000)')
+          timeoutMs: z.number().optional().describe('Max wait ms (default 30000)')
         },
         async ({ tabId, timeoutMs }) => {
           const tab = tabRegistry.get(tabId)
@@ -201,34 +261,21 @@ export function createMasterAgent(deps: MasterAgentDeps) {
               isError: true
             }
           }
-          const timeout = timeoutMs ?? 60000
-          const start = Date.now()
-          const idleThreshold = 2000
-
-          while (Date.now() - start < timeout) {
-            const lastTs = ptyManager.getLastDataTime(tab.ptyId)
-            if (lastTs && Date.now() - lastTs > idleThreshold) {
-              return { content: [{ type: 'text' as const, text: 'idle' }] }
-            }
-            await new Promise((r) => setTimeout(r, 500))
-          }
-
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: 'timeout (still active or no activity yet). Try read_output to inspect.'
-              }
-            ]
-          }
+          const result = await waitForIdle(
+            ptyManager,
+            tab.ptyId,
+            timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS,
+            Date.now()
+          )
+          return { content: [{ type: 'text' as const, text: result }] }
         }
       ),
 
       tool(
         'git_status',
-        'Get git status (branch, ahead/behind, uncommitted) for a project at the given path.',
+        'Get git status for a project path.',
         {
-          projectPath: z.string().describe('Absolute path to project root')
+          projectPath: z.string().describe('Absolute project path')
         },
         async ({ projectPath }) => {
           try {
@@ -239,10 +286,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           } catch (e) {
             return {
               content: [
-                {
-                  type: 'text' as const,
-                  text: `Error: ${e instanceof Error ? e.message : String(e)}`
-                }
+                { type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }
               ],
               isError: true
             }
@@ -252,9 +296,9 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'git_log',
-        'Get recent commits for a project',
+        'Recent commits for a project.',
         {
-          projectPath: z.string().describe('Absolute path to project'),
+          projectPath: z.string().describe('Absolute project path'),
           limit: z.number().optional().describe('Max commits (default 5)')
         },
         async ({ projectPath, limit }) => {
@@ -267,10 +311,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           } catch (e) {
             return {
               content: [
-                {
-                  type: 'text' as const,
-                  text: `Error: ${e instanceof Error ? e.message : String(e)}`
-                }
+                { type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }
               ],
               isError: true
             }
@@ -280,15 +321,14 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'read_file',
-        'Read a file from a project. Relative path from project root.',
+        'Read a file from a project (relative path).',
         {
-          projectPath: z.string().describe('Absolute path to project root'),
+          projectPath: z.string().describe('Absolute project path'),
           relativePath: z.string().describe('Relative path within project')
         },
         async ({ projectPath, relativePath }) => {
           try {
             const { readFile } = await import('fs/promises')
-            const { join } = await import('path')
             const fullPath = join(projectPath, relativePath)
             const content = await readFile(fullPath, 'utf-8')
             const truncated = content.length > 10000
@@ -305,13 +345,104 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           } catch (e) {
             return {
               content: [
-                {
-                  type: 'text' as const,
-                  text: `Error: ${e instanceof Error ? e.message : String(e)}`
-                }
+                { type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }
               ],
               isError: true
             }
+          }
+        }
+      ),
+
+      tool(
+        'create_project',
+        'Create a new project entry from an absolute folder path. Adds to sidebar. Use open_tab afterwards to spawn a tab.',
+        {
+          path: z.string().describe('Absolute folder path'),
+          name: z.string().optional().describe('Display name (default: basename of path)'),
+          color: z.string().optional().describe('Hex color e.g. #34d399')
+        },
+        async ({ path, name, color }) => {
+          const result = await rendererControl({
+            action: 'create-project',
+            payload: { path, name, color }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }]
+          }
+        }
+      ),
+
+      tool(
+        'open_tab',
+        'Open a project as a new tab (spawns a Claude Code session). Returns tab info.',
+        {
+          projectId: z.string().describe('Project ID from list_all_projects')
+        },
+        async ({ projectId }) => {
+          const result = await rendererControl({
+            action: 'open-tab',
+            payload: { projectId }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }]
+          }
+        }
+      ),
+
+      tool(
+        'close_tab',
+        'Close an open tab.',
+        {
+          tabId: z.string().describe('Tab ID')
+        },
+        async ({ tabId }) => {
+          const result = await rendererControl({
+            action: 'close-tab',
+            payload: { tabId }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: 'closed' }]
+          }
+        }
+      ),
+
+      tool(
+        'switch_tab',
+        'Make a tab active.',
+        {
+          tabId: z.string().describe('Tab ID')
+        },
+        async ({ tabId }) => {
+          const result = await rendererControl({
+            action: 'switch-tab',
+            payload: { tabId }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: 'active' }]
           }
         }
       )
@@ -347,7 +478,8 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         systemPrompt: SYSTEM_PROMPT,
         mcpServers: { orchestrator: orchestratorServer },
         permissionMode: 'bypassPermissions',
-        cwd: process.env.HOME || '/'
+        cwd: process.env.HOME || '/',
+        model: 'claude-haiku-4-5'
       }
       if (claudeBin) queryOptions.pathToClaudeCodeExecutable = claudeBin
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

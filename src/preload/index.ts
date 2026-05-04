@@ -171,6 +171,24 @@ const api = {
       return () => {
         ipcRenderer.removeListener('master:event', handler)
       }
+    },
+    onControlRequest: (
+      cb: (req: { requestId: string; action: string; payload: unknown }) => void
+    ): (() => void) => {
+      const handler = (
+        _e: IpcRendererEvent,
+        payload: { requestId: string; action: string; payload: unknown }
+      ) => cb(payload)
+      ipcRenderer.on('master-control:request', handler)
+      return () => {
+        ipcRenderer.removeListener('master-control:request', handler)
+      }
+    },
+    respondControl: (
+      requestId: string,
+      result: { ok: true; data?: unknown } | { ok: false; error: string }
+    ): void => {
+      ipcRenderer.send('master-control:response', { requestId, result })
     }
   },
   updater: {

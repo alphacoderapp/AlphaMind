@@ -335,17 +335,14 @@ function mergeToolCalls(existing: ToolCall[], incoming: ToolCall[]): ToolCall[] 
   for (const tc of incoming) {
     const idx = result.findIndex((e) => e.id === tc.id)
     if (idx === -1) {
-      // For tool_result completions, find a matching running call by id to mark done
-      if (tc.status === 'done' && tc.name === '') {
-        const runningIdx = result.findIndex((e) => e.id === tc.id && e.status === 'running')
-        if (runningIdx !== -1) {
-          result[runningIdx] = { ...result[runningIdx]!, status: 'done' }
-          continue
-        }
-      }
       result.push(tc)
     } else {
-      result[idx] = { ...result[idx]!, ...tc }
+      const cur = result[idx]!
+      result[idx] = {
+        ...cur,
+        name: tc.name && tc.name.length > 0 ? tc.name : cur.name,
+        status: tc.status
+      }
     }
   }
   return result

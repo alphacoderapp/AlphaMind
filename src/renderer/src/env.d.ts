@@ -128,12 +128,23 @@ interface TabRegistryApi {
   setActive: (tabId: string | null) => void
 }
 
+interface MasterControlRequest {
+  requestId: string
+  action: string
+  payload: unknown
+}
+
 interface MasterApi {
   sendStart: (
     message: string,
     history?: Array<{ role: 'user' | 'assistant'; content: string }>
   ) => Promise<string>
   onEvent: (cb: (requestId: string, event: unknown) => void) => () => void
+  onControlRequest: (cb: (req: MasterControlRequest) => void) => () => void
+  respondControl: (
+    requestId: string,
+    result: { ok: true; data?: unknown } | { ok: false; error: string }
+  ) => void
 }
 
 interface UpdaterApi {
