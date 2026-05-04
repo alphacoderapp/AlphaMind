@@ -1660,6 +1660,92 @@ input {
   50% { opacity: 1; transform: scale(1.2); box-shadow: 0 0 6px var(--c-cyan); }
 }
 
+.master-workers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px 0;
+  flex-shrink: 0;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.master-worker {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--c-cyan);
+  background: rgba(34, 211, 238, 0.04);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 100ms, background 100ms;
+}
+.master-worker-done {
+  border-left-color: var(--c-green, #34d399);
+  background: rgba(52, 211, 153, 0.05);
+}
+.master-worker-timeout {
+  border-left-color: var(--c-amber, #f59e0b);
+  background: rgba(245, 158, 11, 0.05);
+}
+.master-worker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.master-worker-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-cyan);
+  box-shadow: 0 0 4px var(--c-cyan);
+  animation: master-worker-pulse 0.8s ease-in-out infinite;
+}
+.master-worker-done .master-worker-dot {
+  background: var(--c-green, #34d399);
+  box-shadow: 0 0 4px var(--c-green, #34d399);
+  animation: none;
+}
+.master-worker-timeout .master-worker-dot {
+  background: var(--c-amber, #f59e0b);
+  animation: none;
+}
+@keyframes master-worker-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+.master-worker-name {
+  color: var(--text);
+  font-weight: 500;
+}
+.master-worker-elapsed {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.master-worker-status {
+  color: var(--text-dim);
+}
+.master-worker-tail {
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
 .master-pane-input {
   display: flex;
   gap: 8px;

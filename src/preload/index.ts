@@ -189,6 +189,13 @@ const api = {
       result: { ok: true; data?: unknown } | { ok: false; error: string }
     ): void => {
       ipcRenderer.send('master-control:response', { requestId, result })
+    },
+    onWorkerActivity: (cb: (event: unknown) => void): (() => void) => {
+      const handler = (_e: IpcRendererEvent, payload: unknown) => cb(payload)
+      ipcRenderer.on('master:worker-activity', handler)
+      return () => {
+        ipcRenderer.removeListener('master:worker-activity', handler)
+      }
     }
   },
   updater: {

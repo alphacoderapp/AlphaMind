@@ -7,6 +7,14 @@ interface ToolCall {
   status: 'running' | 'done' | 'error'
 }
 
+interface WorkerActivity {
+  tabId: string
+  projectName: string
+  status: 'start' | 'tick' | 'done' | 'timeout'
+  elapsedMs: number
+  snippet: string
+}
+
 interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -87,11 +95,39 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [workers, setWorkers] = useState<Map<string, WorkerActivity>>(new Map())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const requestIdRef = useRef<string | null>(null)
   const streamingMsgIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    return window.api.master.onWorkerActivity((evt) => {
+      const e = evt as WorkerActivity
+      setWorkers((prev) => {
+        const next = new Map(prev)
+        if (e.status === 'done' || e.status === 'timeout') {
+          // Keep visible briefly with final state, then drop
+          next.set(e.tabId, e)
+          setTimeout(() => {
+            setWorkers((p) => {
+              const cur = p.get(e.tabId)
+              if (cur && cur.status !== 'tick' && cur.status !== 'start') {
+                const n = new Map(p)
+                n.delete(e.tabId)
+                return n
+              }
+              return p
+            })
+          }, 2500)
+        } else {
+          next.set(e.tabId, e)
+        }
+        return next
+      })
+    })
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -298,6 +334,36 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
             )}
             <div ref={messagesEndRef} />
           </div>
+          {workers.size > 0 && (
+            <div className="master-workers">
+              {Array.from(workers.values()).map((w) => (
+                <div
+                  key={w.tabId}
+                  className={`master-worker master-worker-${w.status}`}
+                >
+                  <div className="master-worker-head">
+                    <span className="master-worker-dot" />
+                    <span className="master-worker-name">{w.projectName}</span>
+                    <span className="master-worker-elapsed">
+                      {(w.elapsedMs / 1000).toFixed(1)}s
+                    </span>
+                    <span className="master-worker-status">
+                      {w.status === 'start'
+                        ? 'dispatching…'
+                        : w.status === 'tick'
+                          ? 'working…'
+                          : w.status === 'done'
+                            ? 'done'
+                            : 'timeout'}
+                    </span>
+                  </div>
+                  {w.snippet && (
+                    <pre className="master-worker-tail">{w.snippet}</pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="master-pane-input">
             <textarea
               ref={inputRef}

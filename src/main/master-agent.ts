@@ -50,34 +50,34 @@ Task: `
 
 const SYSTEM_PROMPT = `You are MASTER, a fast orchestrator AI for the user's project workspace in Simple Claude.
 
-The user has multiple Claude Code sessions in project tabs. You manage everything from one chat.
+CRITICAL UX CONTRACT:
+- The user ONLY talks to you, in this one chat. They never type into project tabs.
+- NEVER tell the user "go to the X tab" or "type Y in project". You execute everything.
+- If work belongs in a project (edit code, run command, commit, test, debug, build), DISPATCH to that project's worker. Never describe steps for the user to do.
 
-PRIMARY TOOLS (prefer these — they are FAST):
-- read_file, git_status, git_log → direct facts, no worker needed
-- list_open_tabs, list_all_projects → workspace state
-- create_project / open_tab / close_tab / switch_tab → workspace control
-- dispatch_to_worker(tabId, prompt) → injects, waits, reads in ONE call. Prefer over inject_prompt+wait+read.
+ROUTING DECISIONS:
+1. Pure metadata query (git status, recent commits, read a file) → use direct tools (git_status, git_log, read_file). Faster, no worker round-trip.
+2. Code/file/build/test/commit work → dispatch_to_worker. The worker has full Claude Code capabilities (Edit, Bash, etc.) inside the project.
+3. User references a project with no open tab → list_all_projects → open_tab(projectId) → dispatch_to_worker(newTabId, …). Do this transparently; don't ask.
+4. User references a path that isn't a known project → create_project(path) → open_tab(newProjectId) → dispatch.
+5. Multi-project task → dispatch in parallel by calling dispatch_to_worker multiple times in one assistant turn.
 
-LEGACY TOOLS (avoid unless dispatch_to_worker is unsuitable):
-- inject_prompt, wait_for_idle, read_output
+WORKER COMMUNICATION:
+- dispatch_to_worker(tabId, prompt) injects, waits ~600ms idle, returns stripped output. Use this as your primary execute tool.
+- If a worker task is long-running (>30s), pass timeoutMs explicitly (e.g. 90000 for builds).
+- Worker output is already stripped of TUI noise. Parse the gist; don't echo the raw stream.
+- For follow-ups in the same project, reuse the same tabId (worker keeps context).
 
-RESPONSE FORMAT:
-- 1-sentence summary first
-- Bullets with: ✓ done · ⚠ needs attn · ✗ failed · × skipped · ⌛ in progress
-- Max 3-6 bullets
-- \`code\` for paths/commands
-- No preamble, no recap, no apologies
+LEGACY TOOLS — avoid:
+- inject_prompt + wait_for_idle + read_output → use dispatch_to_worker instead
 
-WHEN NOT TO DISPATCH:
-- Cheap tools answer it (read_file, git_status) → use those
-- Spawning a worker is slow; prefer direct tools
+RESPONSE FORMAT to user:
+- 1-sentence summary first.
+- Bullets with: ✓ done · ⚠ needs attn · ✗ failed · × skipped · ⌛ in progress.
+- Max 3-6 bullets. \`code\` for paths/commands. No preamble, no recap, no apologies.
+- If you dispatched to a worker, mention which project briefly ("dispatched to Websta").
 
-WORKSPACE MUTATION:
-- create_project + open_tab → spin up new tab from a folder path
-- open_tab(projectId) → opens existing project as a fresh tab
-- close_tab / switch_tab → manage focus
-
-Be JARVIS-fast. No fluff.`
+Be JARVIS-fast. The user should feel that one sentence to you = real work happening across their projects.`
 
 export type RendererControlAction =
   | { action: 'create-project'; payload: { path: string; name?: string; color?: string } }
@@ -89,9 +89,30 @@ export type RendererControlResult =
   | { ok: true; data?: unknown }
   | { ok: false; error: string }
 
+export interface WorkerActivityEvent {
+  tabId: string
+  projectName: string
+  status: 'start' | 'tick' | 'done' | 'timeout'
+  elapsedMs: number
+  snippet: string
+}
+
 interface MasterAgentDeps {
   ptyManager: PtyManager
   rendererControl: (req: RendererControlAction) => Promise<RendererControlResult>
+  broadcastWorkerActivity: (event: WorkerActivityEvent) => void
+}
+
+const ANSI_REGEX = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]/g
+const CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g
+
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_REGEX, '').replace(CONTROL_REGEX, '')
+}
+
+function tail(s: string, lines: number): string {
+  const arr = s.split('\n')
+  return arr.slice(Math.max(0, arr.length - lines)).join('\n')
 }
 
 let sdkPromise: Promise<typeof import('@anthropic-ai/claude-agent-sdk')> | null = null
@@ -122,7 +143,7 @@ async function waitForIdle(
 }
 
 export function createMasterAgent(deps: MasterAgentDeps) {
-  const { ptyManager, rendererControl } = deps
+  const { ptyManager, rendererControl, broadcastWorkerActivity } = deps
 
   let serverCache: unknown = null
 
@@ -157,7 +178,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'dispatch_to_worker',
-        'Inject prompt into project tab, wait for worker to finish, return output. Single round-trip. Use this over inject_prompt+wait_for_idle+read_output.',
+        'Inject prompt into project tab, wait for worker to finish, return cleaned output. ANSI-stripped. Single round-trip. Use this as primary execution tool.',
         {
           tabId: z.string().describe('Tab ID from list_open_tabs'),
           prompt: z.string().describe('Task for the worker'),
@@ -180,19 +201,56 @@ export function createMasterAgent(deps: MasterAgentDeps) {
           await new Promise((r) => setTimeout(r, 80))
           ptyManager.write(tab.ptyId, '\r')
 
-          const result = await waitForIdle(
-            ptyManager,
-            tab.ptyId,
-            timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS,
-            startTs
-          )
-          const output = ptyManager.getBuffer(tab.ptyId, startTs)
-          const status = result === 'idle' ? 'idle' : 'timeout'
+          broadcastWorkerActivity({
+            tabId,
+            projectName: tab.projectName,
+            status: 'start',
+            elapsedMs: 0,
+            snippet: prompt.slice(0, 200)
+          })
+
+          const totalTimeout = timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS
+          const deadline = Date.now() + totalTimeout
+          let final: 'idle' | 'timeout' = 'timeout'
+          let lastTickAt = 0
+          while (Date.now() < deadline) {
+            const last = ptyManager.getLastDataTime(tab.ptyId) ?? startTs
+            if (Date.now() - last > IDLE_THRESHOLD_MS) {
+              final = 'idle'
+              break
+            }
+            // Tick every ~250ms with last few stripped lines
+            if (Date.now() - lastTickAt > 250) {
+              lastTickAt = Date.now()
+              const buf = ptyManager.getBuffer(tab.ptyId, startTs)
+              const cleaned = stripAnsi(buf)
+              broadcastWorkerActivity({
+                tabId,
+                projectName: tab.projectName,
+                status: 'tick',
+                elapsedMs: Date.now() - startTs,
+                snippet: tail(cleaned, 4).slice(-400)
+              })
+            }
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+          }
+
+          const rawOutput = ptyManager.getBuffer(tab.ptyId, startTs)
+          const cleaned = stripAnsi(rawOutput).trim()
+
+          broadcastWorkerActivity({
+            tabId,
+            projectName: tab.projectName,
+            status: final === 'idle' ? 'done' : 'timeout',
+            elapsedMs: Date.now() - startTs,
+            snippet: tail(cleaned, 6).slice(-500)
+          })
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `[${status} after ${Date.now() - startTs}ms]\n${output || '(no output)'}`
+                text: `[${final} after ${Date.now() - startTs}ms · project=${tab.projectName}]\n${cleaned || '(no output)'}`
               }
             ]
           }
@@ -240,8 +298,9 @@ export function createMasterAgent(deps: MasterAgentDeps) {
             }
           }
           const text = ptyManager.getBuffer(tab.ptyId, sinceMs)
+          const cleaned = stripAnsi(text).trim()
           return {
-            content: [{ type: 'text' as const, text: text || '(no output yet)' }]
+            content: [{ type: 'text' as const, text: cleaned || '(no output yet)' }]
           }
         }
       ),

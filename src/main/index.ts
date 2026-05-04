@@ -22,7 +22,8 @@ import { tabRegistry, type TabInfo } from './tab-registry'
 import {
   createMasterAgent,
   type RendererControlAction,
-  type RendererControlResult
+  type RendererControlResult,
+  type WorkerActivityEvent
 } from './master-agent'
 import { setupAutoUpdater, openReleasesPage, manualCheck } from './auto-updater'
 
@@ -49,7 +50,16 @@ function rendererControl(req: RendererControlAction): Promise<RendererControlRes
   })
 }
 
-const masterAgent = createMasterAgent({ ptyManager, rendererControl })
+function broadcastWorkerActivity(event: WorkerActivityEvent): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('master:worker-activity', event)
+}
+
+const masterAgent = createMasterAgent({
+  ptyManager,
+  rendererControl,
+  broadcastWorkerActivity
+})
 
 function sendAction(action: string): void {
   if (mainWindow && !mainWindow.isDestroyed()) {

@@ -134,6 +134,14 @@ interface MasterControlRequest {
   payload: unknown
 }
 
+interface WorkerActivityShape {
+  tabId: string
+  projectName: string
+  status: 'start' | 'tick' | 'done' | 'timeout'
+  elapsedMs: number
+  snippet: string
+}
+
 interface MasterApi {
   sendStart: (
     message: string,
@@ -145,6 +153,7 @@ interface MasterApi {
     requestId: string,
     result: { ok: true; data?: unknown } | { ok: false; error: string }
   ) => void
+  onWorkerActivity: (cb: (event: unknown) => void) => () => void
 }
 
 interface UpdaterApi {
