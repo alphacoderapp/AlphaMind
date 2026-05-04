@@ -4,9 +4,10 @@ import { TerminalTab } from './TerminalTab'
 interface Props {
   tabs: Tab[]
   activeTabId: string | null
+  onRestart: (tabId: string) => void
 }
 
-export function TerminalArea({ tabs, activeTabId }: Props) {
+export function TerminalArea({ tabs, activeTabId, onRestart }: Props) {
   if (tabs.length === 0) {
     return (
       <div className="terminal-area terminal-area-empty">
@@ -21,7 +22,12 @@ export function TerminalArea({ tabs, activeTabId }: Props) {
   return (
     <div className="terminal-area">
       {tabs.map((tab) => (
-        <TerminalTab key={tab.id} tab={tab} active={tab.id === activeTabId} />
+        <TerminalTab
+          key={tab.id}
+          tab={tab}
+          active={tab.id === activeTabId}
+          onRestart={onRestart}
+        />
       ))}
     </div>
   )

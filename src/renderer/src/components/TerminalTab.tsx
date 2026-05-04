@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -7,12 +7,20 @@ import type { Tab } from '../types'
 interface Props {
   tab: Tab
   active: boolean
+  onRestart: (tabId: string) => void
 }
 
-export function TerminalTab({ tab, active }: Props) {
+export function TerminalTab({ tab, active, onRestart }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const [ended, setEnded] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+
+  useEffect(() => {
+    setEnded(false)
+    setRestarting(false)
+  }, [tab.ptyId])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -73,8 +81,8 @@ export function TerminalTab({ tab, active }: Props) {
     })
 
     const exitUnsub = window.api.pty.onExit((id) => {
-      if (id === tab.ptyId && termRef.current) {
-        termRef.current.write('\r\n\x1b[33m[session ended]\x1b[0m\r\n')
+      if (id === tab.ptyId) {
+        setEnded(true)
       }
     })
 
@@ -126,14 +134,50 @@ export function TerminalTab({ tab, active }: Props) {
     return () => clearTimeout(t)
   }, [active, tab.ptyId])
 
+  const handleRestart = async () => {
+    if (restarting) return
+    setRestarting(true)
+    try {
+      onRestart(tab.id)
+    } catch {
+      setRestarting(false)
+    }
+  }
+
   return (
     <div
-      ref={containerRef}
-      className="terminal-tab"
+      className="terminal-tab-wrapper"
       style={{
         visibility: active ? 'visible' : 'hidden',
         zIndex: active ? 1 : 0
       }}
-    />
+    >
+      <div ref={containerRef} className="terminal-tab" />
+      {ended && (
+        <div className="terminal-ended-overlay">
+          <div className="terminal-ended-card">
+            <div
+              className="terminal-ended-mark"
+              style={{
+                background: tab.project.color,
+                boxShadow: `0 0 12px ${tab.project.color}`
+              }}
+            />
+            <div className="terminal-ended-title">Session ended</div>
+            <div className="terminal-ended-subtitle">
+              Claude exited in <strong>{tab.project.name}</strong>. Restart to start a fresh session.
+            </div>
+            <button
+              type="button"
+              className="terminal-ended-restart"
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              {restarting ? 'Restarting…' : '↻ Restart Session'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

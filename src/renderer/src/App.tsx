@@ -402,6 +402,24 @@ export default function App() {
     })
   }, [])
 
+  const restartTab = useCallback(
+    async (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId)
+      if (!tab) return
+      try {
+        const newPtyId = await window.api.pty.spawn(tab.project.path, { autoRun: 'claude' })
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === tabId ? { ...t, ptyId: newPtyId, sessionId: undefined } : t
+          )
+        )
+      } catch (e) {
+        console.error('Restart failed:', e)
+      }
+    },
+    [tabs]
+  )
+
   const handleAdd = useCallback(async () => {
     const path = await window.api.dialog.pickFolder()
     if (!path) return
@@ -613,7 +631,7 @@ export default function App() {
             onSelect={setActiveTabId}
             onClose={closeTab}
           />
-          <TerminalArea tabs={tabs} activeTabId={activeTabId} />
+          <TerminalArea tabs={tabs} activeTabId={activeTabId} onRestart={restartTab} />
           <MasterPane
             collapsed={masterCollapsed}
             onToggleCollapse={() => setMasterCollapsed((prev) => !prev)}
