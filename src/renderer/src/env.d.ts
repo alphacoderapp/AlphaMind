@@ -147,6 +147,13 @@ interface WorkerActivityShape {
   snippet: string
 }
 
+interface StoredMasterMessageShape {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+}
+
 interface MasterApi {
   sendStart: (
     message: string,
@@ -159,6 +166,11 @@ interface MasterApi {
     result: { ok: true; data?: unknown } | { ok: false; error: string }
   ) => void
   onWorkerActivity: (cb: (event: unknown) => void) => () => void
+  loadHistory: () => Promise<{
+    messages: StoredMasterMessageShape[]
+    updatedAt: number
+  } | null>
+  saveHistory: (messages: StoredMasterMessageShape[]) => Promise<void>
 }
 
 interface UpdaterApi {

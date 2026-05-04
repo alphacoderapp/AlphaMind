@@ -137,6 +137,48 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
   const requestIdRef = useRef<string | null>(null)
   const streamingMsgIdRef = useRef<string | null>(null)
 
+  // Load persisted master conversation on mount
+  const historyLoadedRef = useRef(false)
+  useEffect(() => {
+    if (historyLoadedRef.current) return
+    historyLoadedRef.current = true
+    window.api.master
+      .loadHistory()
+      .then((data) => {
+        if (!data || !data.messages || data.messages.length === 0) return
+        // Restore but mark non-streaming so the spinner doesn't show
+        const restored: Message[] = data.messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+          streaming: false
+        }))
+        setMessages(restored)
+      })
+      .catch((e) => console.error('Master history load failed:', e))
+  }, [])
+
+  // Persist conversation on changes (debounced)
+  useEffect(() => {
+    if (!historyLoadedRef.current) return
+    if (messages.length === 0) return
+    const t = setTimeout(() => {
+      const persistable = messages
+        .filter((m) => !m.streaming)
+        .map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp
+        }))
+      window.api.master
+        .saveHistory(persistable)
+        .catch((e) => console.error('Master history save failed:', e))
+    }, 500)
+    return () => clearTimeout(t)
+  }, [messages])
+
   useEffect(() => {
     return window.api.master.onWorkerActivity((evt) => {
       const e = evt as WorkerActivity

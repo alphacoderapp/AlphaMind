@@ -200,7 +200,24 @@ const api = {
       return () => {
         ipcRenderer.removeListener('master:worker-activity', handler)
       }
-    }
+    },
+    loadHistory: (): Promise<{
+      messages: Array<{
+        id: string
+        role: 'user' | 'assistant' | 'system'
+        content: string
+        timestamp: number
+      }>
+      updatedAt: number
+    } | null> => ipcRenderer.invoke('master:history-load'),
+    saveHistory: (
+      messages: Array<{
+        id: string
+        role: 'user' | 'assistant' | 'system'
+        content: string
+        timestamp: number
+      }>
+    ): Promise<void> => ipcRenderer.invoke('master:history-save', messages)
   },
   updater: {
     openRelease: (version?: string): void => {

@@ -26,6 +26,11 @@ import {
   type WorkerActivityEvent
 } from './master-agent'
 import { setupAutoUpdater, openReleasesPage, manualCheck } from './auto-updater'
+import {
+  loadMasterHistory,
+  saveMasterHistory,
+  type StoredMasterMessage
+} from './master-history-store'
 
 const ptyManager = new PtyManager()
 let mainWindow: BrowserWindow | null = null
@@ -344,6 +349,14 @@ ipcMain.handle(
     return requestId
   }
 )
+
+ipcMain.handle('master:history-load', async () => {
+  return loadMasterHistory()
+})
+
+ipcMain.handle('master:history-save', async (_event, messages: StoredMasterMessage[]) => {
+  await saveMasterHistory(messages)
+})
 
 // Master-control: renderer responds to project/tab actions requested by master
 ipcMain.on(
