@@ -1,13 +1,14 @@
 :root {
-  --bg: #08080b;
-  --bg-darker: #050507;
-  --surface: #101014;
-  --surface-hover: #15151a;
-  --border: #1c1c22;
-  --border-strong: #2a2a32;
-  --text: #e8e8ec;
-  --text-muted: #7a7a85;
-  --text-disabled: #46464f;
+  --bg: #0a0a0d;
+  --bg-darker: #06060a;
+  --surface: #131318;
+  --surface-hover: #1a1a20;
+  --surface-elevated: #1d1d24;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --text: #f0f0f3;
+  --text-muted: #8a8a95;
+  --text-disabled: #4a4a55;
 
   --c-cyan: #22d3ee;
   --c-emerald: #34d399;
@@ -17,8 +18,52 @@
   --c-rose: #fb7185;
   --c-red: #ef4444;
 
+  /* Multi-layer shadow tokens — Apple-style depth (ambient + cast). */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 1px 2px rgba(0, 0, 0, 0.18), 0 12px 32px rgba(0, 0, 0, 0.48);
+  --shadow-xl: 0 2px 4px rgba(0, 0, 0, 0.2), 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  /* Apple-feel spring curve and base duration. */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 360ms;
+
   --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
   --font-mono: 'Geist Mono', 'SF Mono', Menlo, 'JetBrains Mono', monospace;
+}
+
+:root[data-theme="cream"] {
+  /* Identifier kept as "cream" for state-migration compatibility; visually
+     the light theme is now a true-neutral grey palette (no blue/warm hue).
+     4-tier hierarchy: deep neutral (sidebar/master) → mid neutral (tabstrip)
+     → paper (main bg) → near-white (elevated). Each step shifts ~6%
+     lightness so sections are visually distinct without harsh borders. */
+  --bg: #ffffff;
+  --bg-darker: #f9f9f9;
+  --surface: #f9f9f9;
+  --surface-hover: #f0f0f0;
+  --surface-elevated: #ffffff;
+  --border: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --text: #171717;
+  --text-muted: #525252;
+  --text-disabled: #a3a3a3;
+
+  --c-cyan: #0e7490;
+  --c-emerald: #047857;
+  --c-magenta: #a21caf;
+  --c-amber: #b45309;
+  --c-violet: #6d28d9;
+  --c-rose: #be123c;
+  --c-red: #b91c1c;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.10), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12), 0 16px 48px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.14), 0 32px 96px rgba(0, 0, 0, 0.10);
 }
 
 * {
@@ -64,11 +109,11 @@ input {
 
 /* TITLEBAR */
 .titlebar {
-  height: 38px;
+  height: 40px;
   display: flex;
   align-items: center;
   -webkit-app-region: drag;
-  background: var(--bg);
+  background: var(--bg-darker);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -78,10 +123,9 @@ input {
 }
 .titlebar-content {
   flex: 1;
-  font-size: 10px;
-  letter-spacing: 0.22em;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
-  text-transform: uppercase;
   font-weight: 500;
   display: flex;
   align-items: center;
@@ -90,8 +134,73 @@ input {
 }
 .titlebar-mark {
   color: var(--c-cyan);
-  font-size: 8px;
-  filter: drop-shadow(0 0 4px var(--c-cyan));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ULM badge in titlebar — uses the ULM project's accent colour for both
+   border and pulsing dot so the eye links it to the active worker bay. */
+.titlebar-ulm-badge {
+  margin-left: 14px;
+  padding: 3px 14px 3px 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+.titlebar-ulm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: ulm-dot-pulse 1800ms var(--ease-out) infinite;
+}
+@keyframes ulm-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+/* App-wide ULM indicator — a thin top-edge accent strip + soft glow inside
+   the body frame. Subtle enough to not distract, but unmistakable when the
+   user glances at any window edge. */
+.app-ulm-active {
+  position: relative;
+}
+.app-ulm-active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--c-cyan) 18%,
+    var(--c-cyan) 82%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 100;
+}
+.app-ulm-active .body {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-cyan) 35%, transparent);
 }
 
 /* BODY */
@@ -101,6 +210,206 @@ input {
   min-height: 0;
 }
 
+/* MINI MODE — floating chat-only view (380×500, frameless-feel) */
+.app-mini .titlebar {
+  height: 28px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.app-mini .titlebar-content {
+  font-size: 10.5px;
+  justify-content: flex-start;
+  padding-left: 10px;
+  gap: 6px;
+}
+.titlebar-mini-toggle {
+  -webkit-app-region: no-drag;
+  appearance: none;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 24px;
+  height: 22px;
+  margin-right: 10px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+}
+.titlebar-mini-toggle:hover {
+  color: var(--c-cyan);
+  border-color: var(--c-cyan);
+  background: color-mix(in srgb, var(--c-cyan) 10%, transparent);
+}
+.app-mini .mini-body {
+  flex: 1;
+  flex-direction: row;
+  min-height: 0;
+}
+.app-mini .mini-main {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.app-mini .mini-main .master-pane {
+  position: absolute !important;
+  inset: 0 !important;
+  height: auto !important;
+  border-top: none;
+}
+.app-mini .mini-main .master-pane-handle {
+  display: none;
+}
+
+/* MINI mode input row — orb + textarea + submit all aligned and balanced */
+.app-mini .master-pane-input {
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+.app-mini .master-pane-input > .master-think-orb {
+  align-self: center;
+  margin-bottom: 0;
+  width: 28px !important;
+  height: 28px !important;
+}
+.app-mini .master-pane-input > .master-think-orb svg {
+  width: 28px !important;
+  height: 28px !important;
+}
+.app-mini .master-pane-textarea {
+  min-height: 32px;
+  max-height: 96px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.app-mini .master-pane-submit {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+}
+.app-mini .master-pane-header {
+  height: 30px;
+  padding: 0 12px;
+}
+
+/* MINI RAIL — open tabs in mini mode */
+.mini-rail {
+  width: 68px;
+  flex-shrink: 0;
+  background: var(--bg-darker);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-app-region: no-drag;
+}
+.mini-rail::-webkit-scrollbar {
+  width: 0;
+}
+.mini-rail-empty {
+  color: var(--text-muted);
+  opacity: 0.4;
+  font-size: 14px;
+  text-align: center;
+  padding-top: 8px;
+}
+.mini-rail-tab {
+  position: relative;
+  width: 100%;
+  min-height: 54px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 3px 4px;
+  transition: background var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast);
+}
+.mini-rail-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
+}
+.mini-rail-label {
+  font-size: 9px;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  font-weight: 500;
+  max-width: 100%;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.mini-rail-tab:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.mini-rail-tab.active {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+/* Activity indicators — top-right corner of each tab button */
+.mini-rail-bell,
+.mini-rail-pulse,
+.mini-rail-unread {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-darker);
+}
+.mini-rail-bell {
+  background: #ff9f43;
+  box-shadow: 0 0 8px #ff9f43;
+  animation: mini-rail-bell-pulse 1.1s ease-in-out infinite;
+}
+.mini-rail-pulse {
+  background: var(--c-cyan);
+  animation: mini-rail-bell-pulse 1.4s ease-in-out infinite;
+}
+.mini-rail-unread {
+  background: var(--text-muted);
+}
+@keyframes mini-rail-bell-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.7;
+  }
+}
+
 /* SIDEBAR */
 .sidebar {
   width: 260px;
@@ -108,7 +417,7 @@ input {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--bg-darker);
   position: relative;
 }
 .sidebar-header {
@@ -122,9 +431,9 @@ input {
   border-top: 1px solid var(--border);
 }
 .micro-label {
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0;
   color: var(--text-muted);
   font-weight: 500;
 }
@@ -136,7 +445,7 @@ input {
   justify-content: center;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 999px;
   color: var(--text-muted);
   font-size: 14px;
   cursor: pointer;
@@ -155,14 +464,14 @@ input {
   align-items: center;
   gap: 8px;
   margin: 0 12px 8px;
-  padding: 6px 10px;
+  padding: 6px 14px;
   border: 1px solid var(--c-cyan);
-  border-radius: 4px;
+  border-radius: 999px;
   background: rgba(34, 211, 238, 0.08);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--c-cyan);
   box-shadow: 0 0 12px rgba(34, 211, 238, 0.2);
 }
@@ -202,14 +511,15 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
   cursor: pointer;
   transition: all 100ms;
 }
@@ -237,12 +547,11 @@ input {
 .sidebar-ulm-label {
   flex: 1;
   text-align: left;
-  text-transform: uppercase;
 }
 .sidebar-ulm-state {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.15em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 .sidebar-ulm-toggle.active .sidebar-ulm-state {
@@ -279,19 +588,19 @@ input {
 .sidebar-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 7px 8px 7px 10px;
+  padding: 8px 10px 8px 12px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 8px;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 400;
   cursor: pointer;
   text-align: left;
-  transition: background 80ms ease-out, border-color 80ms ease-out;
+  transition: background var(--dur-fast) var(--ease-out);
   position: relative;
   -webkit-app-region: no-drag;
 }
@@ -300,7 +609,6 @@ input {
 }
 .sidebar-item.active {
   background: var(--surface);
-  border-color: var(--border-strong);
 }
 .sidebar-item.active::before {
   content: '';
@@ -356,6 +664,15 @@ input {
   flex-shrink: 0;
   transition: background 80ms ease-out, box-shadow 80ms ease-out;
 }
+.sidebar-item-orb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.sidebar-item-orb svg { display: block; overflow: hidden; }
 .sidebar-item-dot.idle {
   background: var(--c-emerald);
   opacity: 0.4;
@@ -488,12 +805,12 @@ input {
 
 /* TAB STRIP */
 .tabstrip {
-  height: 36px;
+  height: 40px;
   display: flex;
   align-items: center;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
-  padding: 0 10px;
+  padding: 0 12px;
   gap: 4px;
   -webkit-app-region: drag;
   overflow-x: auto;
@@ -504,26 +821,25 @@ input {
   display: none;
 }
 .tabstrip-empty {
-  font-size: 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
   color: var(--text-disabled);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
+  letter-spacing: 0;
   padding-left: 4px;
 }
 .tabstrip-spawn-worker {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 5px 14px;
   border: 1px solid var(--c-cyan);
-  border-radius: 3px;
+  border-radius: 999px;
   background: rgba(34, 211, 238, 0.06);
   color: var(--c-cyan);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
   cursor: pointer;
   transition: background 100ms, box-shadow 100ms;
 }
@@ -540,17 +856,17 @@ input {
 .tab {
   display: flex;
   align-items: center;
-  height: 26px;
-  padding: 0 8px 0 0;
+  height: 28px;
+  padding: 0 12px 0 0;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 999px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 400;
   cursor: pointer;
   position: relative;
-  transition: all 80ms ease-out;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   -webkit-app-region: no-drag;
   font-family: var(--font-sans);
   flex-shrink: 0;
@@ -562,24 +878,24 @@ input {
   color: var(--text);
 }
 .tab.active {
-  background: var(--surface);
-  border-color: var(--border-strong);
+  background: var(--surface-elevated);
   color: var(--text);
 }
-.tab-stripe {
-  width: 2px;
-  height: 14px;
-  background: var(--accent, var(--c-cyan));
-  border-radius: 1px;
-  margin-left: 8px;
-  box-shadow: 0 0 4px var(--accent, var(--c-cyan));
+.tab-orb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 10px;
   flex-shrink: 0;
-  transition: height 120ms ease-out, box-shadow 120ms ease-out;
+  width: 7px;
+  height: 7px;
 }
-.tab.active .tab-stripe {
-  height: 16px;
-  box-shadow: 0 0 6px var(--accent, var(--c-cyan));
+.tab-orb svg {
+  display: block;
+  overflow: hidden;
 }
+/* Legacy stripe class kept harmless if anything else still references it. */
+.tab-stripe { display: none; }
 .tab-name {
   white-space: nowrap;
   font-size: 12px;
@@ -597,6 +913,23 @@ input {
   cursor: pointer;
   flex-shrink: 0;
   line-height: 1;
+}
+.tab-close-armed {
+  /* First-click-armed state on a worker tab close button: red-tinted with a
+     "?" glyph until the second click confirms (or 2.5s timeout reverts). */
+  background: color-mix(in srgb, var(--c-red) 22%, transparent);
+  color: var(--c-red);
+  font-weight: 600;
+  font-size: 11px;
+  animation: tab-close-armed-pulse 700ms var(--ease-out) infinite;
+}
+@keyframes tab-close-armed-pulse {
+  0%, 100% {
+    background: color-mix(in srgb, var(--c-red) 22%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--c-red) 38%, transparent);
+  }
 }
 .tab-close:hover {
   background: var(--border-strong);
@@ -705,6 +1038,212 @@ input {
 .terminal-tab {
   position: absolute;
   inset: 0;
+}
+
+/* ULM cell frames — decorative overlay sitting on top of each scaled
+   wrapper at the same slot position. Carries the readable header (project,
+   worker index, status) and the visible border. Pointer-events: none so
+   the wrapper underneath catches hover. */
+.ulm-cell-frame {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-darker) 78%, transparent) 0%,
+    transparent 28%,
+    transparent 100%
+  );
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.04);
+  transition:
+    left var(--dur-base) var(--ease-spring),
+    top var(--dur-base) var(--ease-spring),
+    width var(--dur-base) var(--ease-spring),
+    height var(--dur-base) var(--ease-spring),
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+.ulm-cell-frame-active {
+  border-color: color-mix(in srgb, var(--c-cyan) 55%, var(--border-strong));
+  box-shadow:
+    inset 0 0 0 1px rgba(56, 189, 248, 0.18),
+    0 0 18px rgba(56, 189, 248, 0.18);
+}
+.ulm-cell-frame-hovered {
+  /* Lift above the grown wrapper (z 7) so the border + glow stay visible
+     even when the hovered cell sits on top of its neighbours. */
+  z-index: 8;
+  border-color: color-mix(in srgb, var(--c-cyan) 70%, var(--border-strong));
+  box-shadow:
+    inset 0 0 0 1px rgba(56, 189, 248, 0.25),
+    0 0 28px rgba(56, 189, 248, 0.25);
+}
+
+/* When ANY cell is hovered, fade the others out of the way — both their
+   frames (decorative) and their wrappers (live content). Reads as "focus
+   on this one" instead of three cells competing for attention. */
+.terminal-area-ulm-has-hover .ulm-cell-frame:not(.ulm-cell-frame-hovered) {
+  opacity: 0.32;
+}
+.terminal-area-ulm-has-hover .terminal-tab-wrapper--ulm-cell:not(.terminal-tab-wrapper--ulm-cell-hovered) {
+  opacity: 0.28;
+}
+.terminal-area-ulm-has-hover .ulm-cell-frame:not(.ulm-cell-frame-hovered),
+.terminal-area-ulm-has-hover .terminal-tab-wrapper--ulm-cell:not(.terminal-tab-wrapper--ulm-cell-hovered) {
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+/* On hover the chat content is the focus — fade the header overlay so the
+   live xterm/chat reads cleanly. Border + glow stay so the user still sees
+   which cell is active. */
+.ulm-cell-frame-hovered .ulm-cell-header {
+  opacity: 0;
+}
+.ulm-cell-header {
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+.ulm-cell-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-darker) 92%, transparent) 0%,
+    color-mix(in srgb, var(--bg-darker) 50%, transparent) 100%
+  );
+  border-bottom: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+  border-radius: 12px 12px 0 0;
+}
+.ulm-cell-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ulm-cell-name {
+  color: var(--text);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.ulm-cell-status {
+  color: var(--text-muted);
+  flex: 1;
+  text-align: right;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  font-size: 9.5px;
+}
+.ulm-cell-frame-active .ulm-cell-status {
+  color: var(--c-cyan);
+}
+
+/* Electric swarm SVG layer — sits over the terminal-area, particles flow
+   along bezier paths between master pane (bottom edge) and active worker
+   cells (top of area). Pointer-events none, never blocks input. */
+.ulm-swarm-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: visible;
+}
+
+/* Ultimate Developer Mode (ULM) — live grid of mini-windows. -------
+   When the active project is in ULM with 2+ workers, every worker tab
+   becomes a cell in a grid filling the terminal-area. Each cell shows
+   its live xterm/chat at full natural size, scaled down via CSS transform
+   to fit its slot. Hovering a cell grows it to ~88% of the area centred,
+   while siblings stay in their slots underneath. xterm never refits, so
+   scrollback / cursor state survive hover transitions intact. -------- */
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell {
+  visibility: visible;
+  z-index: 1;
+  /* Anchor to the area's top-left so the inline transform's translate is
+     measured from a known origin; scale shrinks toward the same corner. */
+  top: 8px;
+  left: 12px;
+  right: auto;
+  bottom: auto;
+  width: calc(100% - 24px);
+  height: calc(100% - 16px);
+  transform-origin: top left;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-darker);
+  /* Visual frame + header live in the sibling .ulm-cell-frame overlay; the
+     wrapper itself just contributes the live scaled content. */
+  transition:
+    transform var(--dur-base) var(--ease-spring),
+    filter var(--dur-base) var(--ease-out);
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell::after {
+  /* Soft dim overlay on idle cells reads them as "background activity";
+     hovered cell removes the dim so it pops to focus. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  transition: opacity var(--dur-base) var(--ease-out);
+  z-index: 9;
+  opacity: 1;
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell-hovered {
+  /* Above non-hovered frames (z 6) so the grown content covers neighbouring
+     cells visually instead of poking through them. The hovered FRAME goes
+     above this (z 8) so the cyan border + header overlay still read. */
+  z-index: 7;
+  filter: brightness(1.05);
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell-hovered::after {
+  opacity: 0;
+}
+/* In idle cell mode the inner chat input is just visual noise (you can't
+   type into a scaled-down element anyway). Hide it so the cell shows only
+   the live message stream. On hover (cell grown) it returns. */
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell .chat-input-row {
+  visibility: hidden;
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell-hovered .chat-input-row {
+  visibility: visible;
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell > *:not(.terminal-view-toggle):not(.terminal-ended-overlay) {
+  /* Block tiny hit-targets inside the cell; hover-grow is the only
+     intended interaction at cell scale. The hovered cell still doesn't
+     allow input — to interact, click to promote (out of scope here). */
+  pointer-events: none;
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell .terminal-view-toggle,
+.terminal-area-ulm .terminal-tab-wrapper--ulm-cell .terminal-ended-overlay {
+  pointer-events: none;
+}
+
+/* Swarm dispatch flash — Master just sent a prompt to this worker. The
+   pulse fires once and decays; the wrapper class is cleared after ~1.5s
+   in App.tsx so a subsequent dispatch re-arms it cleanly. */
+@keyframes ulm-swarm-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-cyan) 70%, transparent),
+      0 0 0 0 color-mix(in srgb, var(--c-cyan) 40%, transparent);
+  }
+  35% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--c-cyan) 40%, transparent),
+      0 0 22px 8px color-mix(in srgb, var(--c-cyan) 28%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent, 0 0 0 0 transparent;
+  }
+}
+.terminal-area-ulm .terminal-tab-wrapper--ulm-swarm {
+  animation: ulm-swarm-pulse 1400ms var(--ease-out) 1;
 }
 .terminal-ended-overlay {
   position: absolute;
@@ -816,6 +1355,811 @@ input {
   box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
 }
 
+/* CHAT LAYER (per-tab pretty view, overlays xterm) */
+.terminal-tab-wrapper-chat .terminal-tab {
+  /* keep xterm mounted+sized so it parses data, but hide it visually */
+  visibility: hidden;
+  pointer-events: none;
+}
+.chat-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-darker);
+  z-index: 5;
+  border-radius: 4px;
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-behavior: smooth;
+}
+.chat-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.chat-empty-mark {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.chat-empty-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.chat-empty-hint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-disabled);
+}
+.chat-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: 100%;
+}
+.chat-bubble-role {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.chat-bubble-user .chat-bubble-role {
+  color: var(--c-emerald);
+}
+.chat-bubble-assistant .chat-bubble-role {
+  color: var(--chat-accent, var(--c-cyan));
+  text-shadow: 0 0 6px var(--chat-accent, var(--c-cyan));
+}
+.chat-bubble-body {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-bubble-user .chat-bubble-body {
+  align-self: flex-start;
+  background: rgba(52, 211, 153, 0.06);
+  border: 1px solid rgba(52, 211, 153, 0.18);
+  border-radius: 6px;
+  padding: 10px 14px;
+  max-width: 80%;
+}
+.chat-bubble-assistant .chat-bubble-body {
+  padding-right: 4px;
+}
+.chat-bubble-md > * {
+  margin: 0;
+}
+.chat-bubble-md p {
+  margin: 0 0 8px 0;
+}
+.chat-bubble-md p:last-child {
+  margin-bottom: 0;
+}
+.chat-bubble-md ul,
+.chat-bubble-md ol {
+  padding-left: 22px;
+  margin: 4px 0 8px;
+}
+.chat-bubble-md li {
+  margin: 3px 0;
+}
+.chat-bubble-md strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.chat-bubble-md em {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.chat-bubble-md code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--c-cyan);
+}
+.chat-bubble-md pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.chat-bubble-md pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font-size: 11.5px;
+}
+.chat-bubble-md a {
+  color: var(--c-cyan);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+}
+.chat-bubble-md blockquote {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  color: var(--text-muted);
+  margin: 6px 0;
+}
+.chat-tool {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--text-disabled);
+  border-radius: 0 4px 4px 0;
+  background: rgba(255, 255, 255, 0.015);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.chat-tool[open] {
+  border-left-color: var(--c-cyan);
+}
+.chat-tool summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-muted);
+  user-select: none;
+}
+.chat-tool summary::-webkit-details-marker {
+  display: none;
+}
+.chat-tool-arrow {
+  color: var(--text-disabled);
+  font-size: 9px;
+  transition: transform 120ms;
+}
+.chat-tool[open] .chat-tool-arrow {
+  transform: rotate(90deg);
+  color: var(--c-cyan);
+}
+.chat-tool-name {
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.chat-tool-args {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.chat-tool-output {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.chat-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 28px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+.chat-status-spinner {
+  color: var(--c-cyan);
+  text-shadow: 0 0 4px var(--c-cyan);
+  animation: chat-spinner 1.4s ease-in-out infinite;
+}
+@keyframes chat-spinner {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+  align-items: flex-end;
+}
+.chat-input-row textarea {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 10px 14px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  outline: none;
+  resize: none;
+  line-height: 1.4;
+  min-height: 38px;
+  max-height: 200px;
+  transition: border-color 80ms ease-out, box-shadow 80ms ease-out;
+}
+.chat-input-row textarea::placeholder {
+  color: var(--text-disabled);
+}
+.chat-input-row textarea:focus {
+  border-color: var(--chat-accent, var(--c-cyan));
+  box-shadow: 0 0 0 1px var(--chat-accent, var(--c-cyan)),
+    0 0 12px color-mix(in srgb, var(--chat-accent, var(--c-cyan)) 22%, transparent);
+}
+.chat-send {
+  width: 38px;
+  height: 38px;
+  background: transparent;
+  border: 1px solid var(--chat-accent, var(--c-cyan));
+  border-radius: 6px;
+  color: var(--chat-accent, var(--c-cyan));
+  font-size: 16px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  transition: background 100ms, box-shadow 100ms;
+}
+.chat-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-accent, var(--c-cyan)) 12%, transparent);
+  box-shadow: 0 0 12px var(--chat-accent, var(--c-cyan));
+}
+.chat-send:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-disabled);
+}
+
+/* WEB PREVIEW (per-project embedded dev preview) */
+/* WEB PREVIEW — floating widget. position:fixed at user-controlled top/left,
+   draggable by header, resizable from bottom-right corner, explicit maximize
+   toggle. NO hover-expand (that was the bug — accidental cursor entry covered
+   the whole UI). Geometry persists in localStorage so position survives
+   reloads. */
+.web-preview {
+  position: fixed;
+  z-index: 80;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+.web-preview-maximized {
+  border-radius: 14px;
+  box-shadow: var(--shadow-xl);
+}
+
+/* Minimised pill — replaces the floating widget when user clicks the
+   minus button in the header. Positioned to sit visually on the tabstrip
+   row in the top-right corner; clicking restores the full widget at its
+   previous geometry. */
+.web-preview-pill {
+  position: fixed;
+  top: 50px;
+  right: 14px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px 0 10px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.web-preview-pill:hover {
+  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+  box-shadow: var(--shadow-lg);
+}
+.web-preview-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.web-preview-pill-name {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.web-preview-pill-url {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.web-preview-dragging-body {
+  user-select: none;
+  cursor: grabbing;
+}
+.web-preview-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 5;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 50%,
+      var(--border-strong) 50% 60%,
+      transparent 60% 70%,
+      var(--border-strong) 70% 80%,
+      transparent 80% 100%
+    );
+  opacity: 0.6;
+}
+.web-preview-resize-handle:hover {
+  opacity: 1;
+}
+
+.web-preview-header {
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  position: relative;
+  z-index: 2;
+}
+.web-preview-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.web-preview-project {
+  color: var(--text);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.web-preview-url {
+  color: var(--text-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding-left: 4px;
+}
+.web-preview-url-empty {
+  color: var(--text-disabled);
+  font-style: italic;
+}
+.web-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.web-preview-btn {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.web-preview-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.web-preview-btn-active {
+  color: var(--c-cyan);
+  background: var(--surface-hover);
+}
+.web-preview-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+.web-preview-body {
+  flex: 1;
+  position: relative;
+  background: var(--bg-darker);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.web-preview-scale-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+.web-preview-scale-inner {
+  position: relative;
+  flex-shrink: 0;
+}
+.web-preview-frame {
+  border: none;
+  display: flex;
+}
+
+/* DEVICE PROFILE BUTTONS — segmented control */
+.web-preview-devices {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-right: 6px;
+  padding: 2px;
+  background: var(--bg-darker);
+  border-radius: 6px;
+}
+.web-preview-device {
+  width: 24px;
+  height: 20px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.web-preview-device:hover {
+  color: var(--text);
+}
+.web-preview-device-active {
+  color: var(--text);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Auto-dispatch toast — transient inline notice ("3 errors sent to master")
+   that fades after a few seconds. Bottom-right of the preview body, never
+   blocks clicks. */
+.web-preview-toast {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--c-cyan) 14%, var(--surface-elevated));
+  border: 1px solid color-mix(in srgb, var(--c-cyan) 45%, transparent);
+  border-radius: 6px;
+  color: var(--c-cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  z-index: 6;
+  animation: web-preview-toast-in 180ms var(--ease-out);
+}
+@keyframes web-preview-toast-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.web-preview-loading-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent, var(--c-cyan)),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: web-preview-loading 1.2s linear infinite;
+  z-index: 5;
+}
+@keyframes web-preview-loading {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+.web-preview-empty {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-darker);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 20px;
+}
+.web-preview-empty-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.web-preview-empty-hint {
+  font-size: 11px;
+  color: var(--text-disabled);
+  line-height: 1.4;
+}
+.web-preview-empty-hint strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.web-preview-start {
+  margin-top: 4px;
+  background: transparent;
+  border: 1px solid var(--accent, var(--c-cyan));
+  color: var(--accent, var(--c-cyan));
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 100ms, box-shadow 100ms;
+}
+.web-preview-start:hover {
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: 0 0 12px var(--accent, var(--c-cyan));
+}
+
+/* WEB PREVIEW failure overlay */
+.web-preview-fail {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-darker);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 20px;
+  z-index: 3;
+}
+.web-preview-fail-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-red);
+}
+.web-preview-fail-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  max-width: 90%;
+  word-break: break-word;
+}
+.web-preview-fail-hint {
+  font-size: 11px;
+  color: var(--text-disabled);
+  line-height: 1.4;
+}
+.web-preview-fail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.web-preview-btn-primary {
+  background: transparent;
+  border: 1px solid var(--accent, var(--c-cyan));
+  color: var(--accent, var(--c-cyan));
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 100ms, box-shadow 100ms;
+}
+.web-preview-btn-primary:hover {
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: 0 0 8px var(--accent, var(--c-cyan));
+}
+
+/* CHAT + MASTER ATTACHMENTS */
+.chat-attachments,
+.master-pane-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 20px 0;
+}
+.master-pane-attachments {
+  padding: 8px 16px 0;
+}
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  max-width: 240px;
+}
+.chat-attachment-chip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.chat-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.chat-attachment-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+.chat-attachment-size {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.chat-attachment-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-disabled);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.chat-attachment-remove:hover {
+  background: var(--surface-hover);
+  color: var(--c-red);
+}
+.chat-upload-error {
+  width: 100%;
+  font-size: 10px;
+  color: var(--c-red);
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+
+/* DROP OVERLAYS */
+.chat-drop-overlay,
+.master-pane-drop-overlay {
+  position: absolute;
+  inset: 6px;
+  border: 2px dashed var(--c-cyan);
+  border-radius: 8px;
+  background: rgba(34, 211, 238, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+.chat-drop-overlay-text,
+.master-pane-drop-overlay-text {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-cyan);
+  text-shadow: 0 0 8px var(--c-cyan);
+}
+.chat-layer-drag-over .chat-input-row textarea,
+.master-pane-drag-over .master-pane-textarea {
+  border-color: var(--c-cyan);
+}
+
+/* TERMINAL VIEW TOGGLE (top-right floating chip) */
+.terminal-view-toggle {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 9;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid var(--c-cyan);
+  border-radius: 4px;
+  color: var(--c-cyan);
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.25);
+  transition: all 100ms ease-out;
+}
+.terminal-view-toggle:hover {
+  background: rgba(34, 211, 238, 0.18);
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.45);
+  transform: translateY(-1px);
+}
+
 /* xterm */
 .xterm {
   height: 100%;
@@ -833,7 +2177,7 @@ input {
   height: 22px;
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 12px 0 8px;
   background: var(--bg);
   border-top: 1px solid var(--border);
   font-family: var(--font-mono);
@@ -844,6 +2188,25 @@ input {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   overflow: hidden;
+}
+.statusbar-theme-toggle {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-right: 6px;
+  padding: 0;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.statusbar-theme-toggle:hover {
+  color: var(--text);
+  background: var(--surface);
 }
 .statusbar-section {
   display: flex;
@@ -889,28 +2252,37 @@ input {
   }
 }
 
-/* MODAL */
+/* MODAL — Apple-style glass */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
   -webkit-app-region: no-drag;
+  animation: modalBackdropIn var(--dur-base) var(--ease-out);
 }
 .modal {
-  width: 420px;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6),
-    inset 0 0 0 1px rgba(34, 211, 238, 0.04);
+  width: 440px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-xl);
   display: flex;
   flex-direction: column;
+  animation: modalIn var(--dur-base) var(--ease-spring);
+}
+@keyframes modalBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 .modal-header {
   padding: 16px 20px 10px;
@@ -1676,13 +3048,13 @@ input {
 
 /* MASTER PANE */
 .master-pane {
-  background: var(--surface);
-  border-top: 1px solid var(--border-strong);
+  background: var(--bg);
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   position: relative;
-  transition: height 80ms ease-out;
+  transition: height var(--dur-fast) var(--ease-out);
 }
 .master-pane-handle {
   position: absolute;
@@ -2111,6 +3483,37 @@ input {
   align-items: flex-end;
   flex-shrink: 0;
 }
+.master-pane-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px 0;
+  flex-shrink: 0;
+}
+.master-pane-quick-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 80ms ease-out, border-color 80ms ease-out,
+    background 80ms ease-out;
+}
+.master-pane-quick-btn:hover:not(:disabled) {
+  color: var(--c-cyan);
+  border-color: var(--c-cyan);
+  background: rgba(34, 211, 238, 0.08);
+}
+.master-pane-quick-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.app-mini .master-pane-quick-actions {
+  padding: 6px 12px 0;
+}
 .master-pane-textarea {
   flex: 1;
   background: var(--bg);
@@ -2134,28 +3537,30 @@ input {
 .master-pane-textarea::placeholder {
   color: var(--text-disabled);
 }
-.master-pane-parallel-trigger {
-  width: 32px;
-  height: 36px;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-dim);
-  font-size: 14px;
-  cursor: pointer;
-  font-family: var(--font-mono);
-  letter-spacing: -2px;
-  transition: all 80ms ease-out;
+/* Master think-orb — always-on volumetric particle cloud where the kebab
+   menu used to be. Idle: gentle drift. Thinking (master sending): faster
+   rotation, brighter glow, more internal flow. Pure visual indicator, no
+   click target. */
+.master-think-orb {
   flex-shrink: 0;
+  pointer-events: none;
+  transition: filter var(--dur-base) var(--ease-out);
 }
-.master-pane-parallel-trigger:hover:not(:disabled) {
-  border-color: var(--c-cyan);
-  color: var(--c-cyan);
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.2);
+.master-pane-input > .master-think-orb {
+  align-self: flex-end;
+  margin-bottom: -2px;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.18));
 }
-.master-pane-parallel-trigger:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
+.master-think-orb-active {
+  filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.45));
+}
+.master-pane-input > .master-think-orb-speaking {
+  filter: drop-shadow(0 0 18px rgba(125, 211, 252, 0.65));
+  animation: orb-speak-glow 0.8s ease-in-out infinite;
+}
+@keyframes orb-speak-glow {
+  0%, 100% { filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.45)); }
+  50% { filter: drop-shadow(0 0 22px rgba(125, 211, 252, 0.75)); }
 }
 .master-pane-submit {
   width: 36px;

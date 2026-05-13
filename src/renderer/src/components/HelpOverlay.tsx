@@ -43,7 +43,7 @@ const SECTIONS: Section[] = [
     shortcuts: [
       { keys: '⌘⇧I', label: 'Resize clipboard image (avoid Claude 2000px limit)' },
       { keys: '⌘/', label: 'Show this help' },
-      { keys: '⌘Q', label: 'Quit Simple Claude' },
+      { keys: '⌘Q', label: 'Quit Alphacod' },
       { keys: '⌘⌥M', label: 'Minimize window' },
       { keys: 'Esc', label: 'Close any modal' }
     ]

@@ -7,9 +7,13 @@ export interface StoredAppState {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
   ultimateModeProjectId?: string | null
+  projectPreviews?: Record<string, string>
+  previewWidth?: number
+  previewCollapsed?: boolean
+  theme?: 'dark' | 'cream'
 }
 
-const STORE_DIR = join(app.getPath('home'), '.simple-claude')
+const STORE_DIR = join(app.getPath('home'), '.alphacod')
 const STATE_FILE = join(STORE_DIR, 'state.json')
 
 export async function loadState(): Promise<StoredAppState | null> {

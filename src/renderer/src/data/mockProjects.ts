@@ -23,5 +23,5 @@ export const defaultProjects: Project[] = [
   { id: 'fashionista-mirror', name: 'Fashionista Mirror', path: '/Users/martinnisu/Fashionista Mirror', category: 'mobile', color: C.violet },
   { id: 'fashionista-pivot', name: 'Fashionista Pivot', path: '/Users/martinnisu/FASHIONISTA', category: 'mobile', color: C.violet },
   { id: 'arabella', name: 'Arabella Bot', path: '/Users/martinnisu/whatsapp-github-bot', category: 'bots', color: C.amber },
-  { id: 'simple-claude', name: 'Simple Claude', path: '/Users/martinnisu/SimpleClaude', category: 'tools', color: C.emerald }
+  { id: 'alphacod', name: 'Alphacod', path: '/Users/martinnisu/SimpleClaude', category: 'tools', color: C.emerald }
 ]

@@ -6,6 +6,7 @@ import type { ProjectStatus } from '../App'
 import { Sigil } from './Sigil'
 import { ContextMenu } from './ContextMenu'
 import { SessionList } from './SessionList'
+import { MasterThinkOrb } from './MasterThinkOrb'
 
 const COLORS = ['#22d3ee', '#34d399', '#e879f9', '#fbbf24', '#a78bfa', '#fb7185']
 
@@ -86,7 +87,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <span className="micro-label">PROJECTS</span>
+        <span className="micro-label">Projects</span>
         <button
           className="sidebar-add"
           title="Add project"
@@ -98,8 +99,8 @@ export function Sidebar({
       </div>
       {ultimateModeProjectId && (
         <div className="sidebar-ulm-banner">
-          <span className="sidebar-ulm-banner-dot" />
-          <span className="sidebar-ulm-banner-text">ULTIMATE MODE</span>
+          <MasterThinkOrb size={7} thinking />
+          <span className="sidebar-ulm-banner-text">Ultimate mode</span>
           <button
             type="button"
             className="sidebar-ulm-banner-exit"
@@ -113,7 +114,7 @@ export function Sidebar({
       <div className="sidebar-list">
         {projects.length === 0 && (
           <div className="sidebar-empty">
-            <span className="micro-label">NO PROJECTS</span>
+            <span className="micro-label">No projects</span>
             <span className="sidebar-empty-hint">Click + to add one</span>
           </div>
         )}
@@ -178,7 +179,13 @@ export function Sidebar({
                 >
                   ›
                 </button>
-                <span className={`sidebar-item-dot${dotClass}`} />
+                <span className={`sidebar-item-orb${dotClass}`}>
+                  <MasterThinkOrb
+                    size={6}
+                    accent={p.color}
+                    thinking={!!status?.hasRunning || !!status?.hasBell}
+                  />
+                </span>
               </div>
               {expanded.has(p.id) && (
                 <>
@@ -194,12 +201,16 @@ export function Sidebar({
                       }}
                       style={{ '--accent': p.color } as CSSProperties}
                     >
-                      <span className="sidebar-ulm-dot" />
+                      <MasterThinkOrb
+                        size={7}
+                        accent={p.color}
+                        thinking={ultimateModeProjectId === p.id}
+                      />
                       <span className="sidebar-ulm-label">
-                        ULTIMATE DEVELOPER MODE
+                        Ultimate developer mode
                       </span>
                       <span className="sidebar-ulm-state">
-                        {ultimateModeProjectId === p.id ? 'ON' : 'OFF'}
+                        {ultimateModeProjectId === p.id ? 'on' : 'off'}
                       </span>
                     </button>
                     {ultimateModeProjectId === p.id && (
@@ -223,7 +234,7 @@ export function Sidebar({
       </div>
       <div className="sidebar-footer">
         <span className="micro-label">
-          {ultimateModeProjectId ? `1 OF ${allProjectCount} (ULM)` : `${allProjectCount} TOTAL`}
+          {ultimateModeProjectId ? `1 of ${allProjectCount} (ULM)` : `${allProjectCount} total`}
         </span>
       </div>
 

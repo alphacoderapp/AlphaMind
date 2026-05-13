@@ -81,6 +81,10 @@ interface StoredAppStateShape {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
   ultimateModeProjectId?: string | null
+  projectPreviews?: Record<string, string>
+  previewWidth?: number
+  previewCollapsed?: boolean
+  theme?: 'dark' | 'cream'
 }
 
 interface StateApi {
@@ -98,6 +102,7 @@ interface PathApi {
 
 interface ShellApi {
   openPath: (path: string) => void
+  openExternal: (url: string) => void
 }
 
 interface ResizeImageResultShape {
@@ -115,6 +120,7 @@ interface ClipboardApi {
 interface WindowApi {
   focus: () => void
   onAction: (cb: (action: string) => void) => () => void
+  setMiniMode: (enabled: boolean) => Promise<{ ok: boolean; mini?: boolean }>
 }
 
 interface TabInfoForRegistryShape {
@@ -142,7 +148,7 @@ interface MasterControlRequest {
 interface WorkerActivityShape {
   tabId: string
   projectName: string
-  status: 'start' | 'tick' | 'done' | 'timeout'
+  status: 'queued' | 'start' | 'tick' | 'done' | 'timeout'
   elapsedMs: number
   snippet: string
 }
@@ -154,10 +160,26 @@ interface StoredMasterMessageShape {
   timestamp: number
 }
 
+interface UploadsApi {
+  save: (payload: {
+    name: string
+    mimeType: string
+    data: ArrayBuffer
+  }) => Promise<{ path: string; name: string; mimeType: string; sizeBytes: number }>
+}
+
+interface ScreenApi {
+  capture: () => Promise<
+    | { path: string; name: string; mimeType: string; sizeBytes: number }
+    | { error: string }
+  >
+}
+
 interface MasterApi {
   sendStart: (
     message: string,
-    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+    attachmentPaths?: string[]
   ) => Promise<string>
   onEvent: (cb: (requestId: string, event: unknown) => void) => () => void
   onControlRequest: (cb: (req: MasterControlRequest) => void) => () => void
@@ -193,6 +215,8 @@ declare global {
       clipboard: ClipboardApi
       window: WindowApi
       tabRegistry: TabRegistryApi
+      uploads: UploadsApi
+      screen: ScreenApi
       master: MasterApi
       updater: UpdaterApi
     }

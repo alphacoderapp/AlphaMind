@@ -6,6 +6,7 @@ import type { PtyManager } from './pty-manager'
 import { tabRegistry } from './tab-registry'
 import { getProjectStats } from './project-stats'
 import { loadProjects } from './projects-store'
+import { searchArchive } from './master-archive-store'
 
 function resolveClaudeCodeBinary(): string | undefined {
   if (!app.isPackaged) return undefined
@@ -44,24 +45,48 @@ function resolveClaudeCodeBinary(): string | undefined {
   }
 }
 
-const COMPRESSION_PREFIX = `Compressed output: fragments not sentences, abbreviate, drop articles. Keep code/paths/identifiers exact. Be specific and short.
+// Prepended to every dispatched prompt. The first paragraph is a DIRECTIVE
+// ("execute the task using your tools") — without it Claude Code reads short
+// task lines as conversational and produces empty responses. The output
+// directive comes second so it doesn't dilute the action signal. Workers
+// MUST reply with a status line, even on success — silent dispatches are how
+// we ended up with the "(no response)" bug where master's prompt suffix got
+// echoed back as the assistant message.
+const COMPRESSION_PREFIX = `Execute the task below in this project. Use your tools (Bash for shell, Edit for code, Read for files) to actually do the work — do not just describe it. When done, reply with ONE line:
+  • "DONE: <one specific fact>" on success (e.g. "DONE: server up at http://localhost:3000")
+  • "FAILED: <reason>" on error
+No reasoning, no plan, no recap, no parentheticals. Just execute then status line.
 
 Task: `
 
-const SYSTEM_PROMPT = `You are MASTER, a fast orchestrator AI for the user's project workspace in Simple Claude.
+const SYSTEM_PROMPT = `You are MASTER, a fast orchestrator AI for the user's project workspace in Alphacod.
 
 CRITICAL UX CONTRACT:
 - The user ONLY talks to you, in this one chat. They never type into project tabs.
 - NEVER tell the user "go to the X tab" or "type Y in project". You execute everything.
 - If work belongs in a project (edit code, run command, commit, test, debug, build), DISPATCH to that project's worker. Never describe steps for the user to do.
-- dispatch_to_worker AUTO-DETECTS URLs in worker output and auto-opens them in the browser. If you see "[URL DETECTED: ... already opened in user's browser]" in the dispatch result, the browser is ALREADY OPEN — do NOT call open_url again for the same URL. Just mention it in your reply: "Avatud: <url>".
+- dispatch_to_worker AUTO-DETECTS URLs in worker output and routes them to the EMBEDDED preview pane (top-right of app). If you see "[URL DETECTED: ... already shown in embedded preview pane]" in the dispatch result, the user can already see the live site IN THE APP — do NOT call open_url for the same URL. Just mention it: "Server üleval: <url> — preview vaateväljas".
+- open_url is for situations where the user explicitly wants the URL in their EXTERNAL browser (e.g. "ava Chromes", "open in browser", DevTools needed). Default routing is in-app preview.
 - For "run/start dev server / pane käima" tasks, ALWAYS dispatch_to_worker and trust its URL detection. Never guess ports (no "tüüpiliselt localhost:3000"). If no URL was detected, the worker is probably still building — say so and let user wait, do NOT invent ports.
 - Never write "How to test:" / "Kuidas katsetada:" sections with manual steps. If something needs to happen, you do it. The only output to user is a status report of what already happened.
+
+VISION:
+- You CAN see images the user attaches (drag-drop, screenshots via "Vaata ekraani" button). Images arrive as inline visual content, NOT as file paths to Read. Describe what you actually see in pixels.
+- Do NOT say "I cannot see images" or "I don't have OCR/vision". You do — Claude 4.x has multimodal vision built in.
+- For screenshots of the user's screen, identify the app/window, key UI elements, error messages, and visible state. Answer the user's question about what is shown.
 
 KNOWLEDGE BOUNDARY:
 - You know NOTHING about the user's projects beyond what list_open_tabs / list_all_projects / git_status / read_file / dispatch_to_worker tell you in THIS conversation. No prior project knowledge cached.
 - When the user asks "what does X do" / "mis X teeb", call read_file (e.g. README.md, package.json, CLAUDE.md inside the project) or dispatch_to_worker to ask the project's own claude. Never make up architecture details from general knowledge.
 - If you don't know, say so and propose calling a tool. Don't fabricate.
+
+LONG-TERM MEMORY (search_master_history):
+- Working memory in this prompt only includes the last few turns. Anything older is on disk in a searchable archive.
+- IMMEDIATELY call search_master_history when the user references past conversations: "eelmine kord", "siis kui", "mäletad", "we already talked about", "last time", "what did we decide", references to dates/weekdays, or any "X is what I asked about before" pattern.
+- Also call it when YOU lack context to answer ("hetkel ma ei tea, mis sa varem otsustasid…" → search instead of guessing).
+- Phrase the query specifically. BAD: "previous discussion". GOOD: "decision about ULM gate behavior when user requests parallel work".
+- If results are empty or weak (low scores), say so honestly: "ei leidnud arhiivist midagi seotut".
+- Don't search proactively for unrelated turns. Only when context is genuinely missing.
 
 INVESTIGATE BEFORE ASKING:
 - Before asking the user clarifying questions about a project ("did you mean X or Y?"), FIRST dispatch a discovery prompt to the project's worker: "brief 3-4 bullets: what is this, current stack, deployment, mobile/web/desktop status, what's in flight". Workers know the project deeply.
@@ -76,7 +101,7 @@ ULTIMATE DEVELOPER MODE (ULM):
 - Multiple workers for the ULM project are ALLOWED and ENCOURAGED for parallel sub-tasks.
 - Workers are SEPARATE Claude Code subprocesses (independent sessions). They are NOT subagents inside you. To run work in parallel, you MUST spawn additional workers and dispatch to them — never try to do the work yourself.
 
-PARALLEL DISPATCH PROTOCOL — when user gives N parallel tasks, follow these phases EXACTLY:
+PARALLEL DISPATCH PROTOCOL — when user gives N parallel tasks (N > 1), follow these phases EXACTLY:
 
   PHASE 1 (one assistant turn): RECON
     - get_workspace_state (confirm ULM project + existing worker count)
@@ -84,12 +109,25 @@ PARALLEL DISPATCH PROTOCOL — when user gives N parallel tasks, follow these ph
     - git_status on the project path (see in-flight changes)
     - For each task, if scope unclear, read_file the likely-affected file to estimate scope.
 
+  PHASE 1.5: ULM GATE — STOP and DECIDE based on workspace state:
+    a) ULM is ACTIVE for the right project → proceed straight to PHASE 2.
+    b) ULM is OFF (ultimateMode === null) AND user wants N > 1 parallel tasks → DO NOT silently serialize.
+       STOP and ask user verbatim, in their language:
+         "ULM pole aktiivne <projectName> projektil. Aktiveerin selle, et <N> workerit paralleelselt jooksutada? (Y/n)"
+       (English: "Ultimate Developer Mode is off for <projectName>. Activate it to run <N> workers in parallel? (Y/n)")
+       Wait for user reply. End your turn here.
+       On 'Y' / 'jah' / 'jah, aktiveeri' / similar: call set_ultimate_mode({projectId}) THEN proceed to PHASE 2 in the SAME turn.
+       On 'n' / 'ei' / 'sequential' / similar: skip to fallback — dispatch all N tasks to the single existing tab serially (one dispatch_to_worker per task, await each).
+    c) ULM is ACTIVE but for a DIFFERENT project than the one the user wants parallel work on → ask user verbatim:
+         "ULM on praegu <currentProject> projektil. Vahetan <newProject> peale, et seal paralleelselt töötada? (Y/n)"
+       On confirm: set_ultimate_mode({projectId: newProjectId}) then proceed.
+
   PHASE 2 (one assistant turn): SPAWN
     - Call spawn_parallel_worker EXACTLY (N - existing_workers) times in this single turn (parallel tool calls).
     - Capture each returned tabId.
 
   PHASE 3 (one assistant turn): DISPATCH
-    - Call dispatch_to_worker N times in this single turn (parallel).
+    - Call dispatch_to_workers ONCE with an array of N {tabId, prompt} pairs — they run truly in parallel and you get all results back together.
     - EACH dispatched prompt MUST contain three lines verbatim:
       1. The task description (specific, scoped).
       2. "Touch only these files/dirs: <list>"
@@ -121,11 +159,24 @@ ROUTING DECISIONS:
 4. User references a path that isn't a known project → create_project(path) → open_tab(newProjectId) → dispatch.
 5. Multi-project task → dispatch in parallel by calling dispatch_to_worker multiple times in one assistant turn.
 
-WORKER COMMUNICATION:
-- dispatch_to_worker(tabId, prompt) injects, waits ~600ms idle, returns stripped output. Use this as your primary execute tool.
+WORKER COMMUNICATION (FAST PATH):
+- For ≥2 independent tasks: ALWAYS use dispatch_to_workers([{tabId, prompt}, …]) — ONE tool call, all run in parallel, all results returned together. This is the fastest possible orchestration.
+- For 1 task or a follow-up on the same tab: use dispatch_to_worker(tabId, prompt).
 - If a worker task is long-running (>30s), pass timeoutMs explicitly (e.g. 90000 for builds).
 - Worker output is already stripped of TUI noise. Parse the gist; don't echo the raw stream.
 - For follow-ups in the same project, reuse the same tabId (worker keeps context).
+- Same tabId twice in one batch → serialised, wastes time. Use DIFFERENT tabIds for parallelism. Spawn extra workers via spawn_parallel_worker if you need more tabs.
+- Don't poll a worker. If a dispatch returns 'timeout', extend timeoutMs on the NEXT call about that tab — don't spam new dispatches.
+
+DISPATCH PROMPT RULES — when constructing the \`prompt\` arg for dispatch_to_worker:
+- Write a plain imperative directive: "Run \`npm test\`. Reply DONE/FAILED with the count." — never a narrated paragraph.
+- NEVER add parenthetical meta-instructions like "(no response)", "(silent)", "(quick)", "(just run)". Workers read parentheticals as conversation, not directives, and reply with the literal text instead of executing.
+- NEVER tell the worker to stay silent. The dispatch tool ALREADY reads the worker's reply — workers MUST end with one status line so master can confirm completion.
+- NEVER include "Task:" or "Compressed output:" prefixes — the dispatch tool prepends them automatically.
+- NEVER concatenate multiple unrelated tasks in one prompt. One dispatch = one task. For N tasks, call dispatch_to_worker N times.
+- For shell commands: "Run \`<command>\`. Reply DONE: <terse fact> or FAILED: <reason>."
+- For file edits: "Edit <path> to <change>. Reply DONE: <one-line summary>."
+- For investigation: "Read <path> and tell me <specific question>. Reply with the answer in one line."
 
 LEGACY TOOLS — avoid:
 - inject_prompt + wait_for_idle + read_output → use dispatch_to_worker instead
@@ -154,6 +205,8 @@ export type RendererControlAction =
   | { action: 'switch-tab'; payload: { tabId: string } }
   | { action: 'spawn-parallel-worker'; payload: { projectId: string } }
   | { action: 'get-workspace-state'; payload: Record<string, never> }
+  | { action: 'set-ultimate-mode'; payload: { projectId: string | null } }
+  | { action: 'set-project-preview'; payload: { projectId: string; url: string } }
 
 export type RendererControlResult =
   | { ok: true; data?: unknown }
@@ -162,7 +215,7 @@ export type RendererControlResult =
 export interface WorkerActivityEvent {
   tabId: string
   projectName: string
-  status: 'start' | 'tick' | 'done' | 'timeout'
+  status: 'queued' | 'start' | 'tick' | 'done' | 'timeout'
   elapsedMs: number
   snippet: string
 }
@@ -180,6 +233,29 @@ function stripAnsi(s: string): string {
   return s.replace(ANSI_REGEX, '').replace(CONTROL_REGEX, '')
 }
 
+// Belt-and-suspenders sanitizer for worker prompts. The master LLM has been
+// observed (a) re-prefixing with "Task:" or "Compressed output:" even though
+// the dispatch tool adds those, and (b) tacking trailing parenthetical
+// meta-instructions like "(no response - just run command...)" — Claude Code
+// reads the parenthetical as conversational and replies with the literal
+// phrase instead of executing the command. Strip these defensively so a
+// regressed system prompt can't break dispatch silently.
+function sanitizeWorkerPrompt(prompt: string): string {
+  let s = prompt
+  // Drop master-side prefixes the LLM may have duplicated.
+  s = s.replace(/^\s*Compressed output:[^\n]*\n+/i, '')
+  s = s.replace(/^\s*Task:\s*/i, '')
+  // Drop a trailing parenthetical meta-instruction. Match the WHOLE balanced
+  // parenthesis only when it's clearly a directive (contains one of the
+  // known offending phrases) so we don't accidentally strip legitimate
+  // notes the user wrote.
+  s = s.replace(
+    /\s*\([^()]*\b(no response|just run|stay silent|silent|fire.and.forget|brief only|quick only)\b[^()]*\)\s*$/i,
+    ''
+  )
+  return s.trim()
+}
+
 function tail(s: string, lines: number): string {
   const arr = s.split('\n')
   return arr.slice(Math.max(0, arr.length - lines)).join('\n')
@@ -193,9 +269,13 @@ async function getSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
   return sdkPromise
 }
 
-const POLL_INTERVAL_MS = 100
-const IDLE_THRESHOLD_MS = 600
+const POLL_INTERVAL_MS = 50
+const IDLE_THRESHOLD_MS = 400
 const DEFAULT_DISPATCH_TIMEOUT_MS = 60000
+// Once a URL is detected the dev server is up — short post-detect grace lets
+// any final stdout settle before we return. Was 1500ms, halved for snappier
+// "preview is ready" feedback.
+const URL_POST_DETECT_GRACE_MS = 700
 
 // Extract URLs from worker output. Common patterns: localhost ports, deploy URLs.
 const URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9.-]+|localhost)(?::\d+)?(?:\/[^\s\x1b'"<>)]*)?/g
@@ -204,6 +284,7 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'list_open_tabs',
   'list_all_projects',
   'dispatch_to_worker',
+  'dispatch_to_workers',
   'git_status',
   'git_log',
   'git_diff',
@@ -214,7 +295,9 @@ const ORCHESTRATOR_TOOL_NAMES = [
   'switch_tab',
   'open_url',
   'get_workspace_state',
-  'spawn_parallel_worker'
+  'spawn_parallel_worker',
+  'set_ultimate_mode',
+  'search_master_history'
 ] as const
 
 const BUILTIN_TOOLS_TO_BLOCK = [
@@ -238,6 +321,175 @@ export function createMasterAgent(deps: MasterAgentDeps) {
   const { ptyManager, rendererControl, broadcastWorkerActivity } = deps
 
   let serverCache: unknown = null
+
+  // Per-tab serialisation. A worker tab is a single Claude Code TUI sharing
+  // one PTY input stream — concurrent prompt writes interleave bytes inside
+  // the TUI's editor and either corrupt the input or queue prompts that the
+  // user never sees the result of. We chain dispatches to the same tabId on
+  // a Promise so a later call waits for the in-flight one to finish, while
+  // dispatches to OTHER tabs continue running in parallel (the original
+  // parallelism property of multi-tab dispatch is preserved).
+  //
+  // Map value is the tail of the chain (always resolves, errors swallowed).
+  // Cleared opportunistically when the tail settles and no follow-up has
+  // attached, to avoid leaking entries for closed tabs.
+  const tabDispatchTail = new Map<string, Promise<unknown>>()
+
+  // Depth counter per tab — number of dispatches currently in-flight + queued
+  // for that tabId. A dispatch that enters with depth > 1 was stacked by the
+  // LLM rather than awaited; we surface that fact in its return so the LLM
+  // sees a concrete signal next assistant turn and learns to await instead.
+  const tabDispatchDepth = new Map<string, number>()
+
+  // Core dispatch routine — shared by single (`dispatch_to_worker`) and
+  // batch (`dispatch_to_workers`) tools. Returns notFound when tab is gone,
+  // otherwise the formatted result text the master should see.
+  async function runDispatch(
+    tabId: string,
+    prompt: string,
+    timeoutMs?: number
+  ): Promise<{ notFound: boolean; text: string }> {
+    const tab = tabRegistry.get(tabId)
+    if (!tab) return { notFound: true, text: '' }
+
+    const queuedAt = Date.now()
+    const depthOnEnter = (tabDispatchDepth.get(tabId) ?? 0) + 1
+    tabDispatchDepth.set(tabId, depthOnEnter)
+    const aheadOfMe = depthOnEnter - 1
+    const prior = tabDispatchTail.get(tabId)
+    if (prior) {
+      broadcastWorkerActivity({
+        tabId,
+        projectName: tab.projectName,
+        status: 'queued',
+        elapsedMs: 0,
+        snippet: `Queued behind ${aheadOfMe} in-flight dispatch${aheadOfMe === 1 ? '' : 'es'} · ${prompt.slice(0, 140)}`
+      })
+      try {
+        await prior
+      } catch {
+        /* prior errors handled by their own dispatch */
+      }
+    }
+
+    let releaseTail!: () => void
+    const myTail = new Promise<void>((res) => {
+      releaseTail = res
+    })
+    tabDispatchTail.set(tabId, myTail)
+
+    try {
+      const startTs = Date.now()
+      const cleanedPrompt = sanitizeWorkerPrompt(prompt)
+      const fullPrompt = COMPRESSION_PREFIX + cleanedPrompt
+      ptyManager.write(tab.ptyId, fullPrompt)
+      await new Promise((r) => setTimeout(r, 80))
+      ptyManager.write(tab.ptyId, '\r')
+
+      const waitedMs = startTs - queuedAt
+      broadcastWorkerActivity({
+        tabId,
+        projectName: tab.projectName,
+        status: 'start',
+        elapsedMs: 0,
+        snippet:
+          waitedMs > 50
+            ? `(waited ${waitedMs}ms in queue) ${prompt.slice(0, 180)}`
+            : prompt.slice(0, 200)
+      })
+
+      const totalTimeout = timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS
+      const deadline = Date.now() + totalTimeout
+      let final: 'idle' | 'timeout' | 'url-detected' = 'timeout'
+      let lastTickAt = 0
+      let detectedUrl: string | null = null
+      let urlDetectedAt = 0
+
+      while (Date.now() < deadline) {
+        const last = ptyManager.getLastDataTime(tab.ptyId) ?? startTs
+
+        if (!detectedUrl) {
+          const cleaned = stripAnsi(ptyManager.getBuffer(tab.ptyId, startTs))
+          const matches = cleaned.match(URL_REGEX)
+          if (matches && matches.length > 0) {
+            const candidate = matches[matches.length - 1]!.replace(/[.,;:]+$/, '')
+            detectedUrl = candidate
+            urlDetectedAt = Date.now()
+          }
+        }
+
+        if (Date.now() - last > IDLE_THRESHOLD_MS) {
+          final = detectedUrl ? 'url-detected' : 'idle'
+          break
+        }
+
+        if (detectedUrl && Date.now() - urlDetectedAt > URL_POST_DETECT_GRACE_MS) {
+          final = 'url-detected'
+          break
+        }
+
+        if (Date.now() - lastTickAt > 250) {
+          lastTickAt = Date.now()
+          const buf = ptyManager.getBuffer(tab.ptyId, startTs)
+          const cleaned = stripAnsi(buf)
+          broadcastWorkerActivity({
+            tabId,
+            projectName: tab.projectName,
+            status: 'tick',
+            elapsedMs: Date.now() - startTs,
+            snippet: tail(cleaned, 4).slice(-400)
+          })
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+      }
+
+      const rawOutput = ptyManager.getBuffer(tab.ptyId, startTs)
+      const cleaned = stripAnsi(rawOutput).trim()
+
+      if (detectedUrl) {
+        try {
+          await rendererControl({
+            action: 'set-project-preview',
+            payload: { projectId: tab.projectId, url: detectedUrl }
+          })
+        } catch {
+          /* noop */
+        }
+      }
+
+      broadcastWorkerActivity({
+        tabId,
+        projectName: tab.projectName,
+        status: final === 'timeout' ? 'timeout' : 'done',
+        elapsedMs: Date.now() - startTs,
+        snippet: detectedUrl
+          ? `Server up at ${detectedUrl} (in embedded preview)`
+          : tail(cleaned, 6).slice(-500)
+      })
+
+      const urlLine = detectedUrl
+        ? `\n[URL DETECTED: ${detectedUrl} — already shown in embedded preview pane; do NOT call open_url for this URL]`
+        : ''
+
+      const queueLine =
+        aheadOfMe > 0
+          ? `\n[QUEUE WARNING: stacked behind ${aheadOfMe} prior dispatch(es) to ${tabId} (waited ${startTs - queuedAt}ms). Use dispatch_to_workers with DIFFERENT tabIds for true parallelism.]`
+          : ''
+
+      return {
+        notFound: false,
+        text: `[${final} after ${Date.now() - startTs}ms · project=${tab.projectName}]${urlLine}${queueLine}\n${cleaned || '(no output)'}`
+      }
+    } finally {
+      releaseTail()
+      const newDepth = (tabDispatchDepth.get(tabId) ?? 1) - 1
+      if (newDepth <= 0) tabDispatchDepth.delete(tabId)
+      else tabDispatchDepth.set(tabId, newDepth)
+      if (tabDispatchTail.get(tabId) === myTail) {
+        tabDispatchTail.delete(tabId)
+      }
+    }
+  }
 
   async function getOrchestratorServer(): Promise<unknown> {
     if (serverCache) return serverCache
@@ -270,7 +522,7 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
       tool(
         'dispatch_to_worker',
-        'PRIMARY EXECUTION TOOL. Send a task prompt to a worker tab, wait for the worker (a separate Claude Code session) to finish, return cleaned output. ANSI-stripped. Auto-opens any URL the worker emits. For parallel work, call dispatch_to_worker N times in one assistant turn — they run concurrently.',
+        'Send ONE task to ONE worker tab and wait for its result. PREFER dispatch_to_workers when you have N tasks — that batches them into ONE tool call running in parallel. Use this single-tab variant only for one-off tasks or follow-ups.',
         {
           tabId: z.string().describe('Tab ID from list_open_tabs'),
           prompt: z.string().describe('Task for the worker'),
@@ -280,107 +532,43 @@ export function createMasterAgent(deps: MasterAgentDeps) {
             .describe(`Max wait ms (default ${DEFAULT_DISPATCH_TIMEOUT_MS})`)
         },
         async ({ tabId, prompt, timeoutMs }) => {
-          const tab = tabRegistry.get(tabId)
-          if (!tab) {
+          const result = await runDispatch(tabId, prompt, timeoutMs)
+          if (result.notFound) {
             return {
               content: [{ type: 'text' as const, text: `Error: tab ${tabId} not found` }],
               isError: true
             }
           }
-          const startTs = Date.now()
-          const fullPrompt = COMPRESSION_PREFIX + prompt
-          ptyManager.write(tab.ptyId, fullPrompt)
-          await new Promise((r) => setTimeout(r, 80))
-          ptyManager.write(tab.ptyId, '\r')
+          return { content: [{ type: 'text' as const, text: result.text }] }
+        }
+      ),
 
-          broadcastWorkerActivity({
-            tabId,
-            projectName: tab.projectName,
-            status: 'start',
-            elapsedMs: 0,
-            snippet: prompt.slice(0, 200)
-          })
-
-          const totalTimeout = timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS
-          const deadline = Date.now() + totalTimeout
-          let final: 'idle' | 'timeout' | 'url-detected' = 'timeout'
-          let lastTickAt = 0
-          let detectedUrl: string | null = null
-          let urlDetectedAt = 0
-
-          while (Date.now() < deadline) {
-            const last = ptyManager.getLastDataTime(tab.ptyId) ?? startTs
-
-            // Detect URL once and auto-open browser. Filter out the master's own
-            // compression-prefix mention of any URLs the user typed.
-            if (!detectedUrl) {
-              const cleaned = stripAnsi(ptyManager.getBuffer(tab.ptyId, startTs))
-              const matches = cleaned.match(URL_REGEX)
-              if (matches && matches.length > 0) {
-                // Pick the last URL (most recent in output, usually the actual server URL)
-                const candidate = matches[matches.length - 1]!.replace(/[.,;:]+$/, '')
-                detectedUrl = candidate
-                urlDetectedAt = Date.now()
-                try {
-                  await shell.openExternal(detectedUrl)
-                } catch {
-                  /* noop */
-                }
-              }
-            }
-
-            // Idle = worker finished (claude returned to prompt). Return immediately.
-            if (Date.now() - last > IDLE_THRESHOLD_MS) {
-              final = detectedUrl ? 'url-detected' : 'idle'
-              break
-            }
-
-            // If URL detected and 1.5s elapsed, return early (server is up, no need
-            // to wait for full idle since dev servers run forever)
-            if (detectedUrl && Date.now() - urlDetectedAt > 1500) {
-              final = 'url-detected'
-              break
-            }
-
-            if (Date.now() - lastTickAt > 250) {
-              lastTickAt = Date.now()
-              const buf = ptyManager.getBuffer(tab.ptyId, startTs)
-              const cleaned = stripAnsi(buf)
-              broadcastWorkerActivity({
-                tabId,
-                projectName: tab.projectName,
-                status: 'tick',
-                elapsedMs: Date.now() - startTs,
-                snippet: tail(cleaned, 4).slice(-400)
+      tool(
+        'dispatch_to_workers',
+        'BATCH PARALLEL DISPATCH. Send N tasks to N worker tabs in ONE call — all run concurrently and you get all results back together. Use this whenever you have ≥2 independent tasks across different tabs. Each item: {tabId, prompt, timeoutMs?}. Returns one result block per task in order. Tabs MUST be different — same tabId twice in one batch will serialise and waste time.',
+        {
+          dispatches: z
+            .array(
+              z.object({
+                tabId: z.string().describe('Tab ID'),
+                prompt: z.string().describe('Task for that worker'),
+                timeoutMs: z.number().optional()
               })
-            }
-            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-          }
-
-          const rawOutput = ptyManager.getBuffer(tab.ptyId, startTs)
-          const cleaned = stripAnsi(rawOutput).trim()
-
-          broadcastWorkerActivity({
-            tabId,
-            projectName: tab.projectName,
-            status: final === 'timeout' ? 'timeout' : 'done',
-            elapsedMs: Date.now() - startTs,
-            snippet: detectedUrl
-              ? `Server up at ${detectedUrl} (browser opened)`
-              : tail(cleaned, 6).slice(-500)
+            )
+            .min(1)
+            .describe('Array of dispatches (≥1)')
+        },
+        async ({ dispatches }) => {
+          const results = await Promise.all(
+            dispatches.map((d) => runDispatch(d.tabId, d.prompt, d.timeoutMs))
+          )
+          const blocks = results.map((r, i) => {
+            const d = dispatches[i]!
+            if (r.notFound) return `[#${i + 1} tabId=${d.tabId}] Error: tab not found`
+            return `[#${i + 1} tabId=${d.tabId}]\n${r.text}`
           })
-
-          const urlLine = detectedUrl
-            ? `\n[URL DETECTED: ${detectedUrl} — already opened in user's browser; do NOT call open_url for this URL]`
-            : ''
-
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `[${final} after ${Date.now() - startTs}ms · project=${tab.projectName}]${urlLine}\n${cleaned || '(no output)'}`
-              }
-            ]
+            content: [{ type: 'text' as const, text: blocks.join('\n\n---\n\n') }]
           }
         }
       ),
@@ -623,6 +811,74 @@ export function createMasterAgent(deps: MasterAgentDeps) {
       ),
 
       tool(
+        'search_master_history',
+        'Semantic search over the user\'s long-term master conversation archive (across all past sessions). Use when the user references something from before — phrases like "eelmine kord", "siis kui", "mäletad", "we discussed", "last time", references to specific dates/decisions, or any time you don\'t have the context in working memory. Returns top-N relevant messages with surrounding context (one before, one after each hit).',
+        {
+          query: z.string().describe('What to look for — paraphrase the user\'s reference into a search query, e.g. "decision about ULM gate parallel workers"'),
+          limit: z.number().int().positive().max(15).optional().describe('How many top hits to return (default 5)')
+        },
+        async ({ query, limit }) => {
+          try {
+            const result = await searchArchive(query, limit ?? 5, true)
+            if (result.total === 0) {
+              return {
+                content: [{ type: 'text' as const, text: 'Archive is empty — no past conversations stored yet.' }]
+              }
+            }
+            if (result.hits.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: `No matches for "${query}" in ${result.total} archived messages.` }]
+              }
+            }
+            const lines: string[] = [`Found ${result.hits.length} matches in ${result.total} archived messages:`]
+            const ctx = result.contextWindow ?? result.hits
+            for (const m of ctx) {
+              const date = new Date(m.timestamp).toISOString().slice(0, 16).replace('T', ' ')
+              const isHit = result.hits.some((h) => h.id === m.id)
+              const score = isHit ? result.hits.find((h) => h.id === m.id)!.score.toFixed(2) : '–'
+              const marker = isHit ? '★' : '·'
+              const trimmed = m.content.length > 400 ? m.content.slice(0, 400) + '…' : m.content
+              lines.push(`\n${marker} [${date} · ${m.role} · score=${score}]\n${trimmed}`)
+            }
+            return {
+              content: [{ type: 'text' as const, text: lines.join('\n') }]
+            }
+          } catch (e) {
+            return {
+              content: [{ type: 'text' as const, text: `Error searching archive: ${e instanceof Error ? e.message : String(e)}` }],
+              isError: true
+            }
+          }
+        }
+      ),
+
+      tool(
+        'set_ultimate_mode',
+        'Activate or deactivate Ultimate Developer Mode for a project. Pass projectId to activate. Pass null to turn ULM off entirely. ONLY call this AFTER the user has explicitly confirmed they want ULM on. Required before spawning parallel workers when ULM is currently off.',
+        {
+          projectId: z
+            .string()
+            .nullable()
+            .describe('Project ID to activate ULM for, or null to turn ULM off')
+        },
+        async ({ projectId }) => {
+          const result = await rendererControl({
+            action: 'set-ultimate-mode',
+            payload: { projectId }
+          })
+          if (!result.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+              isError: true
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }]
+          }
+        }
+      ),
+
+      tool(
         'spawn_parallel_worker',
         'Spawn an additional worker tab on a project (only allowed when that project is in Ultimate Developer Mode). Each worker is a fresh independent Claude Code session. Outside ULM, this reuses the existing single tab. Call this N times in one turn before dispatching to N parallel workers.',
         {
@@ -680,18 +936,57 @@ export function createMasterAgent(deps: MasterAgentDeps) {
 
   async function* runQuery(
     userMessage: string,
-    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+    attachmentPaths?: string[]
   ): AsyncGenerator<unknown> {
     try {
       const { query } = await getSdk()
       const orchestratorServer = await getOrchestratorServer()
 
       let promptText = userMessage
+      // Split image attachments out from other files. Images get inlined as
+      // base64 vision content blocks below; non-image files stay as @path
+      // refs (Claude CLI resolves them as document context).
+      const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+      const isImage = (p: string): boolean =>
+        imageExts.some((ext) => p.toLowerCase().endsWith(ext))
+      const imagePaths = (attachmentPaths ?? []).filter(isImage)
+      const otherPaths = (attachmentPaths ?? []).filter((p) => !isImage(p))
+      if (otherPaths.length > 0) {
+        const refs = otherPaths.map((p) => `@${p}`).join('\n')
+        promptText = `${refs}\n\n${promptText}`
+      }
       if (history && history.length > 0) {
         const transcript = history
           .map((m) => `${m.role === 'user' ? 'USER' : 'MASTER'}: ${m.content}`)
           .join('\n\n')
-        promptText = `Recent conversation context (for continuity):\n\n${transcript}\n\n---\nNEW USER MESSAGE: ${userMessage}`
+        promptText = `Recent conversation context (for continuity):\n\n${transcript}\n\n---\nNEW USER MESSAGE: ${promptText}`
+      }
+
+      // Build image content blocks for vision. The Claude Agent SDK accepts
+      // an AsyncIterable<SDKUserMessage> as `prompt`, where the message can
+      // contain multimodal content blocks. Without this, attached PNGs reach
+      // Claude only as file paths that Read tools see as binary — no vision.
+      const { readFile } = await import('fs/promises')
+      const imageBlocks: Array<{
+        type: 'image'
+        source: { type: 'base64'; media_type: string; data: string }
+      }> = []
+      for (const p of imagePaths) {
+        try {
+          const buf = await readFile(p)
+          const lower = p.toLowerCase()
+          let media: string = 'image/png'
+          if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) media = 'image/jpeg'
+          else if (lower.endsWith('.gif')) media = 'image/gif'
+          else if (lower.endsWith('.webp')) media = 'image/webp'
+          imageBlocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: media, data: buf.toString('base64') }
+          })
+        } catch (e) {
+          console.error('master: failed to load image', p, e)
+        }
       }
 
       const claudeBin = resolveClaudeCodeBinary()
@@ -701,9 +996,11 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         mcpServers: { orchestrator: orchestratorServer },
         permissionMode: 'bypassPermissions',
         cwd: process.env.HOME || '/',
-        // Sonnet 4.6 for sharper scope-planning + conflict detection. Low
-        // effort = decisive coordinator, no over-deliberation, fast turns.
-        model: 'claude-sonnet-4-6',
+        // Haiku 4.5 for fast tool orchestration. Master is a coordinator
+        // (which tab? which tool? in parallel?) — Haiku handles tool selection
+        // 3-5x faster than Sonnet. If we ever hit a case that needs deeper
+        // reasoning, swap back to claude-sonnet-4-6 here.
+        model: 'claude-haiku-4-5-20251001',
         effort: 'low',
         // Isolate master from user-level memory/settings. Without this, master
         // pulls ~/.claude/projects/*/memory/*.md into context and answers project
@@ -718,8 +1015,29 @@ export function createMasterAgent(deps: MasterAgentDeps) {
         allowedTools: ORCHESTRATOR_TOOL_NAMES.map((n) => `mcp__orchestrator__${n}`)
       }
       if (claudeBin) queryOptions.pathToClaudeCodeExecutable = claudeBin
+
+      // Choose prompt form. Plain string when there are no images (fast path,
+      // unchanged behavior); AsyncIterable carrying a multimodal user message
+      // when we have images so the SDK forwards them to the vision model.
+      let promptArg: unknown = promptText
+      if (imageBlocks.length > 0) {
+        const content = [
+          { type: 'text' as const, text: promptText },
+          ...imageBlocks
+        ]
+        async function* multimodalPrompt(): AsyncGenerator<unknown> {
+          yield {
+            type: 'user' as const,
+            message: { role: 'user' as const, content },
+            parent_tool_use_id: null,
+            session_id: ''
+          }
+        }
+        promptArg = multimodalPrompt()
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream = (query as any)({ prompt: promptText, options: queryOptions })
+      const stream = (query as any)({ prompt: promptArg, options: queryOptions })
 
       for await (const event of stream) {
         yield event

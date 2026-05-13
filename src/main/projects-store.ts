@@ -11,7 +11,7 @@ export interface StoredProject {
   category?: string
 }
 
-const STORE_DIR = join(app.getPath('home'), '.simple-claude')
+const STORE_DIR = join(app.getPath('home'), '.alphacod')
 const STORE_FILE = join(STORE_DIR, 'projects.json')
 
 export async function loadProjects(): Promise<StoredProject[] | null> {

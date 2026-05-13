@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { Icon, type IconName } from './Icon'
+import { MasterThinkOrb } from './MasterThinkOrb'
 
 interface ToolCall {
   id: string
@@ -43,7 +45,7 @@ function formatToolName(tc: ToolCall): string {
 interface WorkerActivity {
   tabId: string
   projectName: string
-  status: 'start' | 'tick' | 'done' | 'timeout'
+  status: 'queued' | 'start' | 'tick' | 'done' | 'timeout'
   elapsedMs: number
   snippet: string
 }
@@ -126,6 +128,16 @@ function extractFromEvent(event: unknown): { textDelta?: string; toolCalls?: Too
   return {}
 }
 
+interface MasterAttachment {
+  path: string
+  name: string
+  mimeType: string
+  sizeBytes: number
+  previewDataUrl?: string
+}
+
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+
 export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -133,11 +145,75 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
   const [workers, setWorkers] = useState<Map<string, WorkerActivity>>(new Map())
   const [parallelOpen, setParallelOpen] = useState(false)
   const [parallelTasks, setParallelTasks] = useState('')
+  const [attachments, setAttachments] = useState<MasterAttachment[]>([])
+  const [dragOver, setDragOver] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const requestIdRef = useRef<string | null>(null)
   const streamingMsgIdRef = useRef<string | null>(null)
+  const [lastDeltaTs, setLastDeltaTs] = useState(0)
+  const [lastToolTs, setLastToolTs] = useState(0)
+  const [nowTs, setNowTs] = useState(0)
+  // Rolling token-rate sample for intensity. Tracks total assistant chars
+  // emitted in the last ~1.5s so a fast streaming response pushes intensity
+  // up and a slow one keeps it modest.
+  const charSamplesRef = useRef<{ ts: number; total: number }[]>([])
+  const totalCharsRef = useRef(0)
+  const [tokenRate, setTokenRate] = useState(0)
+
+  // Tick fast so intensity feels live. Idle: 200ms is enough (orb just drifts).
+  // Active (sending OR recent activity): 80ms so radial pulses + decay look
+  // smooth instead of stepped.
+  useEffect(() => {
+    const since = Math.min(
+      Date.now() - lastDeltaTs,
+      Date.now() - lastToolTs
+    )
+    const fastMode = sending || since < 1500
+    const interval = fastMode ? 80 : 200
+    const id = window.setInterval(() => {
+      const now = Date.now()
+      setNowTs(now)
+      // recompute rolling token rate from sample window
+      const cutoff = now - 1500
+      charSamplesRef.current = charSamplesRef.current.filter((s) => s.ts >= cutoff)
+      const samples = charSamplesRef.current
+      if (samples.length >= 2) {
+        const first = samples[0]!
+        const last = samples[samples.length - 1]!
+        const dt = (last.ts - first.ts) / 1000
+        const dc = last.total - first.total
+        setTokenRate(dt > 0 ? dc / dt : 0)
+      } else {
+        setTokenRate(0)
+      }
+    }, interval)
+    return () => window.clearInterval(id)
+  }, [sending, lastDeltaTs, lastToolTs])
+
+  // Continuous intensity 0-1 — feeds the orb's rotation, breath, glow.
+  // Components: baseline (sending), token-rate (speaking), tool-call pulse
+  // (decaying spike), running-worker count. Clamped to [0,1].
+  const orbIntensity = (() => {
+    let i = 0
+    if (sending) i += 0.25
+    // Token rate: 80 chars/s = full speak intensity. Caps at 0.5.
+    i += Math.min(0.5, tokenRate / 160)
+    // Recent tool-call → 200ms spike that decays over 700ms.
+    const sinceTool = nowTs - lastToolTs
+    if (sinceTool < 700) {
+      const decay = Math.exp(-sinceTool / 250)
+      i += 0.4 * decay
+    }
+    // Active workers → bias intensity up.
+    const runningWorkers = Array.from(workers.values()).filter(
+      (w) => w.status === 'start' || w.status === 'tick' || w.status === 'queued'
+    ).length
+    if (runningWorkers > 0) i += Math.min(0.3, runningWorkers * 0.1)
+    return Math.min(1, Math.max(0, i))
+  })()
 
   // Load persisted master conversation on mount
   const historyLoadedRef = useRef(false)
@@ -161,25 +237,36 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
       .catch((e) => console.error('Master history load failed:', e))
   }, [])
 
-  // Persist conversation on changes (debounced)
+  // Persist conversation on changes (debounced). Saves streaming messages too —
+  // their partial content is still better than losing the whole turn if the app
+  // crashes mid-stream. Restore marks them streaming:false.
+  const messagesRef = useRef<Message[]>([])
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  const persistNow = useCallback(() => {
+    const msgs = messagesRef.current
+    if (msgs.length === 0) return
+    const persistable = msgs
+      .filter((m) => m.content && m.content.trim().length > 0)
+      .map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp
+      }))
+    window.api.master
+      .saveHistory(persistable)
+      .catch((e) => console.error('Master history save failed:', e))
+  }, [])
+
   useEffect(() => {
     if (!historyLoadedRef.current) return
     if (messages.length === 0) return
-    const t = setTimeout(() => {
-      const persistable = messages
-        .filter((m) => !m.streaming)
-        .map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp
-        }))
-      window.api.master
-        .saveHistory(persistable)
-        .catch((e) => console.error('Master history save failed:', e))
-    }, 500)
+    const t = setTimeout(persistNow, 500)
     return () => clearTimeout(t)
-  }, [messages])
+  }, [messages, persistNow])
 
   useEffect(() => {
     return window.api.master.onWorkerActivity((evt) => {
@@ -244,9 +331,21 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
         setSending(false)
         requestIdRef.current = null
         streamingMsgIdRef.current = null
+        // Force-save immediately on completion so a crash/restart between turns
+        // doesn't lose the just-finished assistant response. Use setTimeout(0)
+        // so the messagesRef has the latest streaming:false state.
+        setTimeout(persistNow, 0)
         return
       }
 
+      if (parsed.textDelta) {
+        setLastDeltaTs(Date.now())
+        totalCharsRef.current += parsed.textDelta.length
+        charSamplesRef.current.push({ ts: Date.now(), total: totalCharsRef.current })
+      }
+      if (parsed.toolCalls && parsed.toolCalls.length > 0) {
+        setLastToolTs(Date.now())
+      }
       if (parsed.textDelta || parsed.toolCalls) {
         setMessages((prev) => {
           const lastIdx = prev.length - 1
@@ -281,14 +380,24 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
   }, [])
 
   const sendPrompt = useCallback(
-    async (text: string) => {
+    async (text: string, extraAttachments: MasterAttachment[] = []) => {
       const trimmed = text.trim()
-      if (!trimmed || sending) return
+      const combinedAttachments = [...attachments, ...extraAttachments]
+      if ((!trimmed && combinedAttachments.length === 0) || sending) return
+
+      // Render attachments inline in the user-visible message so the chat shows
+      // the user "I sent these files". The actual prompt to master gets the
+      // raw paths via the attachmentPaths IPC arg.
+      const attachmentSummary =
+        combinedAttachments.length > 0
+          ? combinedAttachments.map((a) => `📎 ${a.name}`).join('  ')
+          : ''
+      const displayContent = [trimmed, attachmentSummary].filter(Boolean).join('\n\n')
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
         role: 'user',
-        content: trimmed,
+        content: displayContent || '(attachments)',
         timestamp: Date.now()
       }
       const history = messages
@@ -300,13 +409,20 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
         }))
         .filter((m) => m.content.trim().length > 0)
 
+      const paths = combinedAttachments.map((a) => a.path)
       setMessages((prev) => [...prev, userMsg])
       setInput('')
+      setAttachments([])
+      setUploadError(null)
       setSending(true)
       streamingMsgIdRef.current = null
 
       try {
-        const requestId = await window.api.master.sendStart(trimmed, history)
+        const requestId = await window.api.master.sendStart(
+          trimmed || 'Look at the attached file(s).',
+          history,
+          paths.length > 0 ? paths : undefined
+        )
         requestIdRef.current = requestId
       } catch (e) {
         setMessages((prev) => [
@@ -321,12 +437,102 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
         setSending(false)
       }
     },
-    [messages, sending]
+    [messages, sending, attachments]
   )
+
+  // Allow other components (like WebPreview's "Pane käima" button) to drop a
+  // pre-built prompt into the master pane via a global event.
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const ev = e as CustomEvent<{ text: string }>
+      if (!ev.detail || !ev.detail.text) return
+      void sendPrompt(ev.detail.text)
+    }
+    window.addEventListener('master:prompt', handler)
+    return () => window.removeEventListener('master:prompt', handler)
+  }, [sendPrompt])
+
+  const handleFiles = useCallback(async (files: FileList | File[]) => {
+    setUploadError(null)
+    const list = Array.from(files)
+    const next: MasterAttachment[] = []
+    for (const file of list) {
+      if (file.size > MAX_FILE_BYTES) {
+        setUploadError(`${file.name} too large (cap 20 MB)`)
+        continue
+      }
+      try {
+        const buffer = await file.arrayBuffer()
+        const saved = await window.api.uploads.save({
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          data: buffer
+        })
+        let previewDataUrl: string | undefined
+        if (file.type.startsWith('image/')) {
+          previewDataUrl = await blobToDataUrl(file)
+        }
+        next.push({ ...saved, previewDataUrl })
+      } catch (e) {
+        setUploadError(e instanceof Error ? e.message : String(e))
+      }
+    }
+    if (next.length > 0) {
+      setAttachments((prev) => [...prev, ...next])
+    }
+  }, [])
+
+  const viewScreen = useCallback(async () => {
+    if (sending) return
+    setUploadError(null)
+    const result = await window.api.screen.capture()
+    if ('error' in result) {
+      setUploadError(result.error)
+      return
+    }
+    await sendPrompt('Vaata mu ekraani ja räägi mida sa näed.', [
+      { ...result, previewDataUrl: undefined }
+    ])
+  }, [sending, sendPrompt])
+
+  const onDragOver = (e: React.DragEvent): void => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault()
+      setDragOver(true)
+    }
+  }
+  const onDragLeave = (e: React.DragEvent): void => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDragOver(false)
+  }
+  const onDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    setDragOver(false)
+    if (e.dataTransfer.files.length > 0) {
+      void handleFiles(e.dataTransfer.files)
+    }
+  }
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (!e.clipboardData) return
+    const dropped: File[] = []
+    for (const item of Array.from(e.clipboardData.items)) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile()
+        if (f) dropped.push(f)
+      }
+    }
+    if (dropped.length > 0) {
+      e.preventDefault()
+      void handleFiles(dropped)
+    }
+  }
+  const removeAttachment = (idx: number): void => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx))
+  }
 
   const submit = useCallback(async () => {
     const trimmed = input.trim()
-    if (!trimmed || sending) return
+    if ((!trimmed && attachments.length === 0) || sending) return
 
     // Slash command: /parallel opens task list modal
     if (/^\/parallel\b/i.test(trimmed)) {
@@ -336,7 +542,7 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
     }
 
     await sendPrompt(trimmed)
-  }, [input, sending, sendPrompt])
+  }, [input, sending, sendPrompt, attachments])
 
   const onDragStart = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -358,8 +564,11 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
 
   return (
     <div
-      className={`master-pane${collapsed ? ' collapsed' : ''}`}
+      className={`master-pane${collapsed ? ' collapsed' : ''}${dragOver ? ' master-pane-drag-over' : ''}`}
       style={{ height: collapsed ? 36 : height }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       {!collapsed && <div className="master-pane-handle" onMouseDown={onDragStart} />}
       <div className="master-pane-header" onClick={collapsed ? onToggleCollapse : undefined}>
@@ -443,13 +652,15 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
                       {(w.elapsedMs / 1000).toFixed(1)}s
                     </span>
                     <span className="master-worker-status">
-                      {w.status === 'start'
-                        ? 'dispatching…'
-                        : w.status === 'tick'
-                          ? 'working…'
-                          : w.status === 'done'
-                            ? 'done'
-                            : 'timeout'}
+                      {w.status === 'queued'
+                        ? 'queued · waiting for prior dispatch'
+                        : w.status === 'start'
+                          ? 'dispatching…'
+                          : w.status === 'tick'
+                            ? 'working…'
+                            : w.status === 'done'
+                              ? 'done'
+                              : 'timeout'}
                     </span>
                   </div>
                   {w.snippet && (
@@ -459,16 +670,31 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
               ))}
             </div>
           )}
-          <div className="master-pane-input">
+          {(attachments.length > 0 || uploadError) && (
+            <div className="master-pane-attachments">
+              {attachments.map((a, i) => (
+                <MasterAttachmentChip
+                  key={`${a.path}-${i}`}
+                  attachment={a}
+                  onRemove={() => removeAttachment(i)}
+                />
+              ))}
+              {uploadError && <div className="chat-upload-error">{uploadError}</div>}
+            </div>
+          )}
+          <div className="master-pane-quick-actions">
             <button
               type="button"
-              className="master-pane-parallel-trigger"
-              onClick={() => setParallelOpen(true)}
+              className="master-pane-quick-btn"
+              onClick={viewScreen}
               disabled={sending}
-              title="Parallel dispatch (/parallel)"
+              title="Master teeb ekraanipildi ja vastab selle põhjal"
             >
-              ⫶⫶
+              Vaata ekraani
             </button>
+          </div>
+          <div className="master-pane-input">
+            <MasterThinkOrb intensity={orbIntensity} />
             <textarea
               ref={inputRef}
               className="master-pane-textarea"
@@ -480,6 +706,7 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
                   submit()
                 }
               }}
+              onPaste={onPaste}
               placeholder="◆ Ask master..."
               rows={2}
               disabled={sending}
@@ -488,7 +715,7 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
               type="button"
               className="master-pane-submit"
               onClick={submit}
-              disabled={sending || !input.trim()}
+              disabled={sending || (!input.trim() && attachments.length === 0)}
               title="Send (⏎)"
             >
               ⏎
@@ -583,8 +810,68 @@ export function MasterPane({ collapsed, onToggleCollapse, height, onResize }: Pr
           </div>
         </div>
       )}
+      {dragOver && (
+        <div className="master-pane-drop-overlay">
+          <div className="master-pane-drop-overlay-text">Drop to attach</div>
+        </div>
+      )}
     </div>
   )
+}
+
+function MasterAttachmentChip({
+  attachment,
+  onRemove
+}: {
+  attachment: MasterAttachment
+  onRemove: () => void
+}): React.JSX.Element {
+  const isImage = attachment.mimeType.startsWith('image/')
+  return (
+    <div className="chat-attachment-chip" title={attachment.name}>
+      {isImage && attachment.previewDataUrl ? (
+        <img src={attachment.previewDataUrl} alt={attachment.name} />
+      ) : (
+        <span className="chat-attachment-icon">
+          <Icon name={kindIconName(attachment.mimeType)} size={13} />
+        </span>
+      )}
+      <span className="chat-attachment-name">{attachment.name}</span>
+      <span className="chat-attachment-size">{formatBytes(attachment.sizeBytes)}</span>
+      <button
+        type="button"
+        className="chat-attachment-remove"
+        onClick={onRemove}
+        title="Remove"
+      >
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  )
+}
+
+function kindIconName(mime: string): IconName {
+  if (mime.startsWith('video/')) return 'attach-video'
+  if (mime === 'application/pdf') return 'attach-doc'
+  if (mime.startsWith('audio/')) return 'attach-audio'
+  if (mime.startsWith('text/')) return 'attach-doc'
+  if (mime.startsWith('image/')) return 'attach-image'
+  return 'attach'
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+function blobToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(file)
+  })
 }
 
 function mergeToolCalls(existing: ToolCall[], incoming: ToolCall[]): ToolCall[] {

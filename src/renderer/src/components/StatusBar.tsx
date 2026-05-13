@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Tab } from '../types'
+import { Icon } from './Icon'
 
 const APP_VERSION = '0.3.1'
 
@@ -10,9 +11,11 @@ interface UpdateState {
 
 interface Props {
   tab: Tab | null
+  theme: 'dark' | 'cream'
+  onToggleTheme: () => void
 }
 
-export function StatusBar({ tab }: Props) {
+export function StatusBar({ tab, theme, onToggleTheme }: Props) {
   const [update, setUpdate] = useState<UpdateState>({ available: false })
 
   useEffect(() => {
@@ -28,8 +31,16 @@ export function StatusBar({ tab }: Props) {
 
   return (
     <div className="statusbar">
+      <button
+        type="button"
+        className="statusbar-theme-toggle"
+        onClick={onToggleTheme}
+        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      >
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={11} />
+      </button>
       <div className="statusbar-section">
-        <span>SIMPLE CLAUDE {APP_VERSION}</span>
+        <span>ALPHACOD {APP_VERSION}</span>
       </div>
       <div className="statusbar-divider" />
       <div className="statusbar-section">

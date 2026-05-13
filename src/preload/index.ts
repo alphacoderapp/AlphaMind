@@ -26,6 +26,10 @@ interface StoredAppState {
   tabs: { projectId: string; sessionId?: string }[]
   activeIndex: number
   ultimateModeProjectId?: string | null
+  projectPreviews?: Record<string, string>
+  previewWidth?: number
+  previewCollapsed?: boolean
+  theme?: 'dark' | 'cream'
 }
 
 interface ResizeImageResult {
@@ -134,6 +138,9 @@ const api = {
   shell: {
     openPath: (path: string): void => {
       ipcRenderer.send('shell:openPath', path)
+    },
+    openExternal: (url: string): void => {
+      ipcRenderer.send('shell:openExternal', url)
     }
   },
   clipboard: {
@@ -144,6 +151,8 @@ const api = {
     focus: (): void => {
       ipcRenderer.send('window:focus')
     },
+    setMiniMode: (enabled: boolean): Promise<{ ok: boolean; mini?: boolean }> =>
+      ipcRenderer.invoke('window:setMiniMode', enabled),
     onAction: (cb: (action: string) => void): (() => void) => {
       const handler = (_e: IpcRendererEvent, action: string) => cb(action)
       ipcRenderer.on('window:action', handler)
@@ -163,11 +172,27 @@ const api = {
       ipcRenderer.send('tab-registry:setActive', tabId)
     }
   },
+  uploads: {
+    save: (payload: {
+      name: string
+      mimeType: string
+      data: ArrayBuffer
+    }): Promise<{ path: string; name: string; mimeType: string; sizeBytes: number }> =>
+      ipcRenderer.invoke('uploads:save', payload)
+  },
+  screen: {
+    capture: (): Promise<
+      | { path: string; name: string; mimeType: string; sizeBytes: number }
+      | { error: string }
+    > => ipcRenderer.invoke('screen:capture')
+  },
   master: {
     sendStart: (
       message: string,
-      history?: Array<{ role: 'user' | 'assistant'; content: string }>
-    ): Promise<string> => ipcRenderer.invoke('master:send-start', message, history),
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+      attachmentPaths?: string[]
+    ): Promise<string> =>
+      ipcRenderer.invoke('master:send-start', message, history, attachmentPaths),
     onEvent: (cb: (requestId: string, event: unknown) => void): (() => void) => {
       const handler = (_e: IpcRendererEvent, payload: { requestId: string; event: unknown }) =>
         cb(payload.requestId, payload.event)

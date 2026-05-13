@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TabStrip } from './components/TabStrip'
 import { TerminalArea } from './components/TerminalArea'
@@ -9,9 +9,14 @@ import { QuickSwitcher } from './components/QuickSwitcher'
 import { HelpOverlay } from './components/HelpOverlay'
 import { Toast, type ToastKind } from './components/Toast'
 import { MasterPane } from './components/MasterPane'
+import { WebPreview } from './components/WebPreview'
+import { Icon } from './components/Icon'
+import { Sigil } from './components/Sigil'
+import { MasterThinkOrb } from './components/MasterThinkOrb'
 import { useProjects } from './hooks/useProjects'
 import type { Project } from './data/mockProjects'
 import type { Tab } from './types'
+import type { TabViewMode } from './components/TerminalTab'
 
 interface TabState {
   lastDataAt: number
@@ -54,8 +59,27 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [masterCollapsed, setMasterCollapsed] = useState(false)
+  const [miniMode, setMiniMode] = useState(false)
+
+  const toggleMiniMode = useCallback(() => {
+    setMiniMode((prev) => {
+      const next = !prev
+      void window.api.window.setMiniMode(next)
+      if (next) setMasterCollapsed(false)
+      return next
+    })
+  }, [])
   const [masterHeight, setMasterHeight] = useState(MASTER_DEFAULT_HEIGHT)
   const [ultimateModeProjectId, setUltimateModeProjectId] = useState<string | null>(null)
+  const [tabViewModes, setTabViewModes] = useState<Map<string, TabViewMode>>(new Map())
+  const [projectPreviews, setProjectPreviews] = useState<Map<string, string>>(new Map())
+  const [theme, setTheme] = useState<'dark' | 'cream'>('dark')
+  // ULM swarm-dispatch indicator: when Master fires a prompt at a worker tab,
+  // we flash that tab's wrapper with a short glow (see TerminalTab CSS). The
+  // tabId is held briefly so the CSS animation can trigger; auto-clears so a
+  // future dispatch to the same tab re-arms the effect.
+  const [swarmTargetTabId, setSwarmTargetTabId] = useState<string | null>(null)
+  const swarmClearTimer = useRef<number | null>(null)
 
   const restoredRef = useRef(false)
   const prevTransitionRef = useRef<Map<string, { running: boolean; bell: boolean }>>(new Map())
@@ -147,6 +171,29 @@ export default function App() {
     window.api.tabRegistry.setActive(activeTabId)
   }, [activeTabId])
 
+  // Subscribe to Master worker-dispatch events so the renderer can paint a
+  // momentary "swarm" glow on the worker tab Master just sent a prompt to.
+  // We only honour `status === 'start'` — that's the actual hand-off moment;
+  // `tick`/`done` are progress updates that don't need their own pulse.
+  useEffect(() => {
+    return window.api.master.onWorkerActivity((evt) => {
+      const e = evt as { tabId?: string; status?: string } | null
+      if (!e || !e.tabId || e.status !== 'start') return
+      if (swarmClearTimer.current !== null) window.clearTimeout(swarmClearTimer.current)
+      setSwarmTargetTabId(e.tabId)
+      swarmClearTimer.current = window.setTimeout(() => {
+        setSwarmTargetTabId(null)
+        swarmClearTimer.current = null
+      }, 1500)
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (swarmClearTimer.current !== null) window.clearTimeout(swarmClearTimer.current)
+    }
+  }, [])
+
   // Restore tabs from disk on first load (after projects are available)
   useEffect(() => {
     if (restoredRef.current || !projectsLoaded) return
@@ -159,6 +206,18 @@ export default function App() {
 
       const ulmId = state.ultimateModeProjectId ?? null
       if (ulmId) setUltimateModeProjectId(ulmId)
+
+      if (state.projectPreviews && typeof state.projectPreviews === 'object') {
+        const m = new Map<string, string>()
+        for (const [pid, url] of Object.entries(state.projectPreviews)) {
+          if (typeof url === 'string' && url) m.set(pid, url)
+        }
+        if (m.size > 0) setProjectPreviews(m)
+      }
+
+      if (state.theme === 'cream' || state.theme === 'dark') {
+        setTheme(state.theme)
+      }
 
       // Dedupe by project EXCEPT in Ultimate Mode where multi-tab on the ULM
       // project is allowed (workers parallelize).
@@ -213,15 +272,21 @@ export default function App() {
   useEffect(() => {
     if (!restoredRef.current) return
     const t = setTimeout(() => {
+      const previewsObj: Record<string, string> = {}
+      projectPreviews.forEach((url, pid) => {
+        previewsObj[pid] = url
+      })
       const state = {
         tabs: tabs.map((t) => ({ projectId: t.project.id, sessionId: t.sessionId })),
         activeIndex: activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1,
-        ultimateModeProjectId
+        ultimateModeProjectId,
+        projectPreviews: previewsObj,
+        theme
       }
       window.api.state.save(state).catch((e) => console.error('Save state failed:', e))
     }, STATE_SAVE_DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [tabs, activeTabId, ultimateModeProjectId])
+  }, [tabs, activeTabId, ultimateModeProjectId, projectPreviews, theme])
 
   useEffect(() => {
     const unsub = window.api.pty.onData((ptyId, data) => {
@@ -274,50 +339,29 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs, tabStates, tick])
 
+  // OS notifications fully disabled. Even silent + cooldowned + bell-only,
+  // the cumulative pattern (notification creation, dock interaction, web
+  // permission prompt on first launch) was being perceived as the app
+  // pulling itself forward. In-app status (titlebar pulse, sidebar dots,
+  // tab activity glow, master pane stream) is enough — none of it touches
+  // the OS window stack.
   useEffect(() => {
-    if (typeof Notification === 'undefined') return
     const prev = prevTransitionRef.current
-
     tabs.forEach((tab) => {
       const activity = tabActivityStates.get(tab.id)
-      const isRunning = activity?.isRunning ?? false
-      const hasBell = activity?.hasBell ?? false
-      const wasState = prev.get(tab.id) ?? { running: false, bell: false }
-
-      const finishedTask = wasState.running && !isRunning
-      const newBell = !wasState.bell && hasBell
-
-      const isInactive = tab.id !== activeTabId
-      const isUnfocused = !document.hasFocus()
-
-      if (isInactive && isUnfocused && (finishedTask || newBell)) {
-        try {
-          const title = `Simple Claude · ${tab.project.name}`
-          const body = newBell ? 'Attention requested' : 'Session ready'
-          const notif = new Notification(title, { body, silent: false })
-          notif.onclick = () => {
-            window.api.window.focus()
-            setActiveTabId(tab.id)
-          }
-        } catch (e) {
-          console.error('Notification failed:', e)
-        }
-      }
-
-      prev.set(tab.id, { running: isRunning, bell: hasBell })
+      prev.set(tab.id, {
+        running: activity?.isRunning ?? false,
+        bell: activity?.hasBell ?? false
+      })
     })
-
     for (const [id] of prev) {
       if (!tabs.find((t) => t.id === id)) prev.delete(id)
     }
-  }, [tabActivityStates, tabs, activeTabId])
+  }, [tabActivityStates, tabs])
 
   useEffect(() => {
-    if (typeof Notification === 'undefined') return
-    if (Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {})
-    }
-  }, [])
+    document.documentElement.dataset.theme = theme
+  }, [theme])
 
   const projectStatus = useMemo(() => {
     const map = new Map<string, ProjectStatus>()
@@ -407,6 +451,14 @@ export default function App() {
     [tabs]
   )
 
+  const setTabViewMode = useCallback((tabId: string, mode: TabViewMode) => {
+    setTabViewModes((prev) => {
+      const next = new Map(prev)
+      next.set(tabId, mode)
+      return next
+    })
+  }, [])
+
   const closeTab = useCallback((tabId: string) => {
     setTabs((prev) => {
       const tab = prev.find((t) => t.id === tabId)
@@ -419,6 +471,12 @@ export default function App() {
       return next
     })
     setTabStates((prev) => {
+      if (!prev.has(tabId)) return prev
+      const next = new Map(prev)
+      next.delete(tabId)
+      return next
+    })
+    setTabViewModes((prev) => {
       if (!prev.has(tabId)) return prev
       const next = new Map(prev)
       next.delete(tabId)
@@ -645,6 +703,31 @@ export default function App() {
             }
           })
         }
+        if (req.action === 'set-project-preview') {
+          const p = req.payload as { projectId: string; url: string }
+          if (!p.projectId || !p.url) return respond({ ok: false, error: 'projectId and url required' })
+          setProjectPreviews((prev) => {
+            const next = new Map(prev)
+            next.set(p.projectId, p.url)
+            return next
+          })
+          return respond({ ok: true })
+        }
+        if (req.action === 'set-ultimate-mode') {
+          const p = req.payload as { projectId: string | null }
+          if (p.projectId !== null) {
+            const project = projectsRef.current.find((x) => x.id === p.projectId)
+            if (!project) return respond({ ok: false, error: 'project not found' })
+          }
+          setUltimateModeProjectId(p.projectId)
+          return respond({
+            ok: true,
+            data: {
+              ultimateModeProjectId: p.projectId,
+              status: p.projectId ? 'activated' : 'deactivated'
+            }
+          })
+        }
         if (req.action === 'spawn-parallel-worker') {
           const p = req.payload as { projectId: string }
           const project = projectsRef.current.find((x) => x.id === p.projectId)
@@ -701,6 +784,12 @@ export default function App() {
         return
       }
 
+      if (e.key === 'j' && !e.shiftKey) {
+        e.preventDefault()
+        setMasterCollapsed((prev) => !prev)
+        return
+      }
+
       if (e.shiftKey && (e.key === ']' || e.key === '[')) {
         e.preventDefault()
         if (tabs.length === 0) return
@@ -727,16 +816,88 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [activeTabId, activeTab, tabs, projects, openProject, closeTab])
 
+  const ulmProject = ultimateModeProjectId
+    ? projects.find((p) => p.id === ultimateModeProjectId) ?? null
+    : null
+
   return (
-    <div className="app">
+    <div
+      className={`app${ulmProject ? ' app-ulm-active' : ''}${miniMode ? ' app-mini' : ''}`}
+    >
       <header className="titlebar">
-        <div className="titlebar-traffic-spacer" />
+        {!miniMode && <div className="titlebar-traffic-spacer" />}
         <div className="titlebar-content">
-          <span className="titlebar-mark">◆</span>
-          <span>SIMPLE CLAUDE</span>
+          <span className="titlebar-mark">
+            <Icon name="alphacod" size={16} strokeWidth={1.4} />
+          </span>
+          <span>{miniMode ? 'MINI' : 'ALPHACOD'}</span>
+          {ulmProject && !miniMode && (
+            <span
+              className="titlebar-ulm-badge"
+              style={{ '--accent': ulmProject.color } as CSSProperties}
+              title={`Ultimate Developer Mode active on ${ulmProject.name}`}
+            >
+              <MasterThinkOrb size={8} accent={ulmProject.color} thinking />
+              ULM · {ulmProject.name}
+            </span>
+          )}
         </div>
-        <div className="titlebar-traffic-spacer" />
+        <button
+          type="button"
+          className="titlebar-mini-toggle"
+          onClick={toggleMiniMode}
+          title={miniMode ? 'Exit Mini Mode' : 'Mini Mode (floating chat)'}
+        >
+          {miniMode ? '⤢' : '⤡'}
+        </button>
+        {!miniMode && <div className="titlebar-traffic-spacer" />}
       </header>
+      {miniMode ? (
+        <div className="body mini-body">
+          <nav className="mini-rail" aria-label="Open tabs">
+            {tabs.length === 0 && (
+              <div className="mini-rail-empty" title="No open tabs">·</div>
+            )}
+            {tabs.map((tab) => {
+              const activity = tabActivityStates.get(tab.id)
+              const isActive = tab.id === activeTabId
+              const hasBell = activity?.hasBell ?? false
+              const isRunning = activity?.isRunning ?? false
+              const hasUnread = activity?.hasUnread ?? false
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`mini-rail-tab${isActive ? ' active' : ''}${
+                    hasBell ? ' bell' : ''
+                  }${isRunning ? ' running' : ''}${hasUnread ? ' unread' : ''}`}
+                  style={{ '--accent': tab.project.color } as CSSProperties}
+                  onClick={() => setActiveTabId(tab.id)}
+                  title={`${tab.project.name}${hasBell ? ' — vajab vastust' : isRunning ? ' — jookseb' : hasUnread ? ' — uus väljund' : ''}`}
+                >
+                  <span className="mini-rail-icon">
+                    <Sigil name={tab.project.name} color={tab.project.color} size={26} />
+                  </span>
+                  <span className="mini-rail-label">{tab.project.name}</span>
+                  {hasBell && <span className="mini-rail-bell" />}
+                  {!hasBell && isRunning && <span className="mini-rail-pulse" />}
+                  {!hasBell && !isRunning && hasUnread && (
+                    <span className="mini-rail-unread" />
+                  )}
+                </button>
+              )
+            })}
+          </nav>
+          <div className="mini-main">
+            <MasterPane
+              collapsed={false}
+              onToggleCollapse={toggleMiniMode}
+              height={9999}
+              onResize={() => {}}
+            />
+          </div>
+        </div>
+      ) : (
       <div className="body">
         <Sidebar
           projects={
@@ -770,6 +931,7 @@ export default function App() {
             activityStates={tabActivityStates}
             onSelect={setActiveTabId}
             onClose={closeTab}
+            ulmActive={ultimateModeProjectId !== null}
             ultimateModeProjectName={
               ultimateModeProjectId
                 ? projects.find((p) => p.id === ultimateModeProjectId)?.name
@@ -787,6 +949,11 @@ export default function App() {
           <TerminalArea
             tabs={tabs}
             activeTabId={activeTabId}
+            ultimateModeProjectId={ultimateModeProjectId}
+            onActivateTab={setActiveTabId}
+            swarmTargetTabId={swarmTargetTabId}
+            viewModes={tabViewModes}
+            onViewModeChange={setTabViewMode}
             onRestart={restartTab}
             onRepath={repathTab}
             onRemoveProject={handleRemoveProject}
@@ -799,7 +966,34 @@ export default function App() {
           />
         </main>
       </div>
-      <StatusBar tab={activeTab} />
+      )}
+      {!miniMode && (
+      <>
+      <WebPreview
+        project={activeTab?.project ?? null}
+        url={activeTab ? projectPreviews.get(activeTab.project.id) : undefined}
+        onClear={() => {
+          if (!activeTab) return
+          setProjectPreviews((prev) => {
+            const next = new Map(prev)
+            next.delete(activeTab.project.id)
+            return next
+          })
+        }}
+        onStartDevServer={(p) => {
+          const prompt = `Käivita "${p.name}" projekti dev server (asukoht: ${p.path}). Vaja loe package.json'i, et tuvastada õige käsk (npm/pnpm/yarn run dev, või Vite/Next.js/Astro/jms). Kui server üleval, raporteeri URL — embedded preview avaneb automaatselt.`
+          window.dispatchEvent(
+            new CustomEvent('master:prompt', { detail: { text: prompt } })
+          )
+        }}
+      />
+      <StatusBar
+        tab={activeTab}
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'cream' : 'dark'))}
+      />
+      </>
+      )}
       {adding && (
         <AddProjectDialog
           initialName={adding.name}

@@ -9,14 +9,16 @@ process.env.PATH = [
   .filter(Boolean)
   .join(':')
 
-import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Menu, desktopCapturer, screen } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
+import { existsSync, renameSync } from 'fs'
+import { homedir } from 'os'
 import { PtyManager, type SpawnOptions } from './pty-manager'
 import { loadProjects, saveProjects, type StoredProject } from './projects-store'
 import { listSessions } from './sessions-store'
 import { loadState, saveState, type StoredAppState } from './state-store'
-import { loadWindowBounds, attachWindowState } from './window-state'
+import { loadWindowBounds, attachWindowState, setWindowStateSavePaused } from './window-state'
 import { getProjectStats, clearProjectStatsCache } from './project-stats'
 import { tabRegistry, type TabInfo } from './tab-registry'
 import {
@@ -31,6 +33,34 @@ import {
   saveMasterHistory,
   type StoredMasterMessage
 } from './master-history-store'
+import { saveUpload, cleanupOldUploads, type SavedUpload } from './uploads-store'
+import iconAsset from '../../resources/icon.png?asset'
+
+// Swallow harmless EPIPE crashes from the main process. These happen when a
+// PTY child exits, electron-vite reloads, or any other path where Node tries
+// to write a process warning / log line after the receiving pipe (stdout,
+// stderr, or another stream) has already closed. Without this handler
+// Electron pops a "JavaScript error in main process" modal and the user
+// thinks the app crashed even though nothing important failed. Real bugs
+// still surface — only the specific EPIPE-on-write pattern is silenced.
+process.on('uncaughtException', (err: Error & { code?: string; syscall?: string }) => {
+  if (err && err.code === 'EPIPE' && (err.syscall === 'write' || !err.syscall)) {
+    return
+  }
+  // Re-throw so dev sees real bugs and the default Electron handler runs.
+  setImmediate(() => {
+    throw err
+  })
+})
+// Mirror for stdout/stderr — the streams themselves may emit 'error' before
+// uncaughtException fires. Detaching listeners prevents the default crash.
+const swallowStreamEpipe = (stream: NodeJS.WriteStream): void => {
+  stream.on('error', (e: NodeJS.ErrnoException) => {
+    if (e && e.code === 'EPIPE') return
+  })
+}
+swallowStreamEpipe(process.stdout)
+swallowStreamEpipe(process.stderr)
 
 const ptyManager = new PtyManager()
 let mainWindow: BrowserWindow | null = null
@@ -160,11 +190,13 @@ async function createWindow(): Promise<BrowserWindow> {
     backgroundColor: '#08080b',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
-    title: 'Simple Claude',
+    title: 'Alphacod',
+    icon: iconAsset,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
-      contextIsolation: true
+      contextIsolation: true,
+      webviewTag: true
     }
   })
 
@@ -181,7 +213,13 @@ async function createWindow(): Promise<BrowserWindow> {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  // showInactive instead of show: app appears but does NOT activate / steal
+  // focus from whatever the user is currently working in. macOS dock icon
+  // still appears, user can switch to Alphacod when they're ready. Plain
+  // show() was forcing the window forward on every launch — combined with
+  // re-launches during dev / electron-updater this looked like the app was
+  // "pulling itself into focus".
+  win.on('ready-to-show', () => win.showInactive())
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -272,6 +310,10 @@ ipcMain.on('shell:openPath', (_event, path: string) => {
   shell.openPath(path)
 })
 
+ipcMain.on('shell:openExternal', (_event, url: string) => {
+  void shell.openExternal(url)
+})
+
 ipcMain.handle('clipboard:writeText', async (_event, text: string) => {
   clipboard.writeText(text)
 })
@@ -305,12 +347,75 @@ ipcMain.handle('clipboard:resizeImage', async () => {
   }
 })
 
+// Mini Mode: shrink window to a 380×500 always-on-top float in the
+// bottom-right, hide the macOS traffic lights so the titlebar reads as a
+// pure drag handle. Frame can't be toggled at runtime in Electron, so we
+// fake "frameless" by hiding the window buttons and letting the renderer
+// collapse the chrome down to a thin draggable strip + MasterPane.
+let preMiniBounds: Electron.Rectangle | null = null
+let preMiniAlwaysOnTop = false
+let isMiniMode = false
+
+ipcMain.handle('window:setMiniMode', (_event, enabled: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false }
+  const win = mainWindow
+  if (enabled && !isMiniMode) {
+    preMiniBounds = win.getBounds()
+    preMiniAlwaysOnTop = win.isAlwaysOnTop()
+    // Pause persistence so the mini bounds never overwrite the real
+    // remembered size. We restore them on exit.
+    setWindowStateSavePaused(true)
+    win.setMinimumSize(320, 360)
+    const display = require('electron').screen.getDisplayNearestPoint(
+      win.getBounds()
+    )
+    const work = display.workArea
+    const w = 420
+    const h = 540
+    const margin = 20
+    win.setBounds({
+      x: work.x + work.width - w - margin,
+      y: work.y + work.height - h - margin,
+      width: w,
+      height: h
+    })
+    win.setAlwaysOnTop(true, 'floating')
+    if (process.platform === 'darwin') {
+      try {
+        win.setWindowButtonVisibility(false)
+      } catch {
+        // older electron versions: ignore
+      }
+    }
+    isMiniMode = true
+    return { ok: true, mini: true }
+  }
+  if (!enabled && isMiniMode) {
+    win.setMinimumSize(880, 540)
+    if (preMiniBounds) win.setBounds(preMiniBounds)
+    win.setAlwaysOnTop(preMiniAlwaysOnTop)
+    if (process.platform === 'darwin') {
+      try {
+        win.setWindowButtonVisibility(true)
+      } catch {
+        // ignore
+      }
+    }
+    isMiniMode = false
+    // Resume persistence with the restored bounds.
+    setWindowStateSavePaused(false)
+    return { ok: true, mini: false }
+  }
+  return { ok: true, mini: isMiniMode }
+})
+
 ipcMain.on('window:focus', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    // Restore from minimised, but never raise/show — both push the window in
+    // front of whatever the user is currently using. The renderer can still
+    // switch the active tab internally; bringing the OS window forward is
+    // the user's choice via dock click.
     if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-    app.focus({ steal: true })
   }
 })
 
@@ -332,13 +437,14 @@ ipcMain.handle(
   (
     event,
     message: string,
-    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+    attachmentPaths?: string[]
   ): string => {
     const requestId = randomUUID()
 
     ;(async () => {
       try {
-        for await (const evt of masterAgent.runQuery(message, history)) {
+        for await (const evt of masterAgent.runQuery(message, history, attachmentPaths)) {
           if (event.sender.isDestroyed()) break
           event.sender.send('master:event', { requestId, event: evt })
         }
@@ -358,6 +464,55 @@ ipcMain.handle(
     return requestId
   }
 )
+
+// Uploads: drag-drop file attachment storage shared by both chats.
+ipcMain.handle(
+  'uploads:save',
+  async (
+    _event,
+    payload: { name: string; mimeType: string; data: ArrayBuffer }
+  ): Promise<SavedUpload> => {
+    return saveUpload(payload.name, payload.mimeType, new Uint8Array(payload.data))
+  }
+)
+
+// Screen capture — snap primary display and save into uploads pipeline so
+// the Master agent can receive it as an attachment exactly like a drag-drop
+// image. macOS users get a Screen Recording permission prompt on first run.
+ipcMain.handle('screen:capture', async (): Promise<SavedUpload | { error: string }> => {
+  try {
+    const primary = screen.getPrimaryDisplay()
+    const { width, height } = primary.size
+    const scale = primary.scaleFactor || 1
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: {
+        width: Math.round(width * scale),
+        height: Math.round(height * scale)
+      }
+    })
+    const target =
+      sources.find((s) => s.display_id === String(primary.id)) ?? sources[0]
+    if (!target) {
+      return { error: 'No screen source available' }
+    }
+    const png = target.thumbnail.toPNG()
+    if (png.length === 0) {
+      return {
+        error:
+          'Empty capture — likely missing Screen Recording permission in System Settings → Privacy & Security'
+      }
+    }
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .slice(0, 19)
+    return await saveUpload(`screen-${stamp}.png`, 'image/png', new Uint8Array(png))
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+})
 
 ipcMain.handle('master:history-load', async () => {
   return loadMasterHistory()
@@ -393,9 +548,50 @@ ipcMain.handle('updater:check', async () => {
   }
 })
 
+// One-time rebrand migration: Simple Claude → Alphacod. Move existing data
+// dirs over so users don't lose history/projects/state when upgrading.
+function migrateRebrand(): void {
+  const home = homedir()
+  const oldDot = join(home, '.simple-claude')
+  const newDot = join(home, '.alphacod')
+  if (!existsSync(newDot) && existsSync(oldDot)) {
+    try {
+      renameSync(oldDot, newDot)
+      console.log('Migrated ~/.simple-claude → ~/.alphacod')
+    } catch (e) {
+      console.error('dotfile migration failed:', e)
+    }
+  }
+  if (process.platform === 'darwin') {
+    const oldUd = join(home, 'Library/Application Support/Simple Claude')
+    const newUd = app.getPath('userData')
+    if (!existsSync(newUd) && existsSync(oldUd)) {
+      try {
+        renameSync(oldUd, newUd)
+        console.log(`Migrated userData ${oldUd} → ${newUd}`)
+      } catch (e) {
+        console.error('userData migration failed:', e)
+      }
+    }
+  }
+}
+
 app.whenReady().then(() => {
+  migrateRebrand()
+  // In dev mode the macOS dock shows the Electron default icon; force the
+  // brand mark. Packaged builds get the icon from the embedded .icns and
+  // calling setIcon there is a no-op anyway.
+  if (process.platform === 'darwin' && !app.isPackaged && app.dock) {
+    try {
+      app.dock.setIcon(iconAsset)
+    } catch (e) {
+      console.warn('dock.setIcon failed:', e)
+    }
+  }
   setupMenu()
   createWindow()
+  // Sweep stale uploads (older than 7 days) on every launch.
+  void cleanupOldUploads().catch((e) => console.error('upload cleanup failed:', e))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
